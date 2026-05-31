@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Avenir Next", "Segoe UI", sans-serif;
+  --font-serif: Georgia, serif;
+  --color-void: #06080c;
+  --color-panel: #10151f;
+  --color-cyan-signal: #52d6ff;
+  --color-mint-signal: #14ce99;
+  --color-rose-signal: #ff5278;
+  --color-amber-signal: #ffcc66;
+  --animate-rise-in: rise-in 680ms ease both;
+  --animate-radar: radar 10s linear infinite;
+  --animate-glow: glow 1.4s ease-in-out infinite alternate;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at 12% 12%, rgba(82, 214, 255, 0.18), transparent 27rem),
+    radial-gradient(circle at 88% 8%, rgba(20, 206, 153, 0.14), transparent 25rem),
+    linear-gradient(135deg, #05070a 0%, #0c1017 42%, #121012 100%);
+  color: #edf5ff;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes radar {
+  from {
+    transform: rotate(0deg) scale(1);
+    opacity: 0.75;
+  }
+  50% {
+    opacity: 0.35;
+  }
+  to {
+    transform: rotate(360deg) scale(1.04);
+    opacity: 0.75;
+  }
+}
+
+@keyframes glow {
+  from {
+    border-color: rgba(82, 214, 255, 0.12);
+  }
+  to {
+    border-color: rgba(82, 214, 255, 0.42);
+  }
+}
+
+@utility glass-panel {
+  border: 1px solid rgba(205, 220, 255, 0.13);
+  background: rgba(15, 20, 27, 0.78);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(26px);
+}
+
+@utility field-shell {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.04);
+}
