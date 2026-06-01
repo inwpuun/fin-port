@@ -14,7 +14,8 @@ Open `http://localhost:3000`.
 ## Pages
 
 - `/` market watch dashboard with TradingView-style chart, watchlist, price alerts, and drawdown-from-top alerts
-- `/portfolio` holdings tracker with buy price, quantity, live market value, total net worth, P/L, and drawdown flags
+- `/portfolio` holdings tracker seeded from `public/my-port.csv` with calculated buy price, quantity, live market value, total net worth, P/L, and drawdown flags
+- `/watchlist` watchlist tracker with live prices, one-year moves, and drawdown flags
 
 ## Symbols
 
@@ -39,6 +40,10 @@ Drawdown windows:
 - 1 year
 
 Browser notifications require enabling the notification toggle and approving the browser permission. They work while the app is open.
+
+## Portfolio CSV
+
+`public/my-port.csv` supports either `holding value` + `% profit`, or `quantity` + `cost basis` + `cost currency` for positions such as bitcoin bought in THB.
 
 ## Docker
 

@@ -1,4 +1,4 @@
-import type { Holding, HoldingWithMarket } from "@/types/portfolio";
+import type { Holding, HoldingWithMarket, PortfolioSeed } from "@/types/portfolio";
 import type { MarketData } from "@/types/market";
 
 export function createHolding(symbol: string, quantity: number, buyPrice: number): Holding {
@@ -28,5 +28,23 @@ export function enrichHolding(holding: Holding, market: MarketData): HoldingWith
     previousTop: market.previousTop,
     drawdownPercent: market.drawdownPercent,
     currency: market.currency
+  };
+}
+
+export function createHoldingFromPortfolioSeed(seed: PortfolioSeed, market: MarketData, convertedCostBasis = seed.costBasis): Holding {
+  const hasQuantityCost = Number.isFinite(seed.quantity) && Number.isFinite(convertedCostBasis) && seed.quantity! > 0;
+  const profitRatio = 1 + (seed.profitLossPercent ?? 0) / 100;
+  const quantity = hasQuantityCost ? seed.quantity! : market.price > 0 ? (seed.marketValue ?? 0) / market.price : 0;
+  const buyPrice = hasQuantityCost
+    ? convertedCostBasis! / quantity
+    : profitRatio > 0
+      ? market.price / profitRatio
+      : market.price;
+
+  return {
+    id: seed.id,
+    symbol: market.symbol,
+    quantity,
+    buyPrice
   };
 }

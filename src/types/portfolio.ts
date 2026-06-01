@@ -5,6 +5,16 @@ export type Holding = {
   buyPrice: number;
 };
 
+export type PortfolioSeed = {
+  id: string;
+  symbol: string;
+  marketValue?: number;
+  profitLossPercent?: number;
+  quantity?: number;
+  costBasis?: number;
+  costCurrency?: string;
+};
+
 export type HoldingWithMarket = Holding & {
   name: string;
   currentPrice: number;

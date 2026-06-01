@@ -32,7 +32,9 @@ const aliases = new Map<string, string>([
   ["NDX", "^NDX"],
   ["DOW", "^DJI"],
   ["DJI", "^DJI"],
-  ["VIX", "^VIX"]
+  ["VIX", "^VIX"],
+  ["BRK.B", "BRK-B"],
+  ["BRK/B", "BRK-B"]
 ]);
 
 const knownMetadata = new Map<string, { name: string; type: AssetType }>([
@@ -238,7 +240,7 @@ export function fallbackMarketData(symbolInput: string, range = "6mo", drawdownR
   const symbol = normalizeSymbol(symbolInput);
   const seed = [...symbol].reduce((sum, char) => sum + char.charCodeAt(0), 0);
   const count = Math.max(getRangeDays(range), getRangeDays(drawdownRange));
-  const base = symbol.includes("BTC") ? 65000 : symbol.includes("GC") ? 2350 : symbol.startsWith("^") ? 5200 : 180;
+  const base = symbol === "THB=X" ? 36 : symbol.includes("BTC") ? 65000 : symbol.includes("GC") ? 2350 : symbol.startsWith("^") ? 5200 : 180;
   const candles: Candle[] = [];
   const volume: VolumePoint[] = [];
   let price = base + (seed % 47);

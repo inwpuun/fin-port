@@ -1,39 +1,70 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { enrichHolding, createHolding } from "@/lib/portfolio";
-import { drawdownRanges } from "@/lib/market";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { createHolding, createHoldingFromPortfolioSeed, enrichHolding } from "@/lib/portfolio";
+import { drawdownRanges, fallbackMarketData } from "@/lib/market";
 import { currencyFormat, percentFormat } from "@/lib/format";
-import type { Holding, HoldingWithMarket } from "@/types/portfolio";
+import type { Holding, HoldingWithMarket, PortfolioSeed } from "@/types/portfolio";
 import type { DrawdownRange, MarketData } from "@/types/market";
 
-const storageKey = "fin-port-holdings-v1";
-const starterHoldings: Holding[] = [
-  { id: "starter-aapl", symbol: "AAPL", quantity: 8, buyPrice: 185 },
-  { id: "starter-btc", symbol: "BTC-USD", quantity: 0.08, buyPrice: 59000 },
-  { id: "starter-gold", symbol: "GC=F", quantity: 1, buyPrice: 2300 }
+const storageKey = "fin-port-holdings-v3";
+
+type SortKey = "symbol" | "quantity" | "buyPrice" | "currentPrice" | "marketValue" | "profitLoss" | "drawdownPercent";
+type SortDirection = "asc" | "desc";
+type PortfolioSort = {
+  key: SortKey;
+  direction: SortDirection;
+};
+
+const sortableColumns: Array<{ key: SortKey; label: string }> = [
+  { key: "symbol", label: "Symbol" },
+  { key: "quantity", label: "Qty" },
+  { key: "buyPrice", label: "Buy" },
+  { key: "currentPrice", label: "Now" },
+  { key: "marketValue", label: "Value" },
+  { key: "profitLoss", label: "P/L" },
+  { key: "drawdownPercent", label: "From Top" }
 ];
 
-export function PortfolioDashboard() {
+export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: PortfolioSeed[] }) {
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [rows, setRows] = useState<HoldingWithMarket[]>([]);
+  const [sort, setSort] = useState<PortfolioSort | null>(null);
   const [symbol, setSymbol] = useState("");
   const [quantity, setQuantity] = useState("");
   const [buyPrice, setBuyPrice] = useState("");
   const [drawdownLimit, setDrawdownLimit] = useState("12");
   const [drawdownRange, setDrawdownRange] = useState<DrawdownRange>("1y");
   const [loading, setLoading] = useState(false);
+  const [bootstrapped, setBootstrapped] = useState(false);
+  const skipNextRefresh = useRef(false);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(storageKey);
-    setHoldings(stored ? JSON.parse(stored) : starterHoldings);
+    if (stored) {
+      try {
+        setHoldings(JSON.parse(stored) as Holding[]);
+        setBootstrapped(true);
+        return;
+      } catch {
+        window.localStorage.removeItem(storageKey);
+      }
+    }
+
+    materializeDefaultPortfolio(defaultPortfolio, drawdownRange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    if (holdings.length) window.localStorage.setItem(storageKey, JSON.stringify(holdings));
+    if (!bootstrapped) return;
+    window.localStorage.setItem(storageKey, JSON.stringify(holdings));
+    if (skipNextRefresh.current) {
+      skipNextRefresh.current = false;
+      return;
+    }
     refreshRows(holdings, drawdownRange);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [holdings, drawdownRange]);
+  }, [holdings, drawdownRange, bootstrapped]);
 
   const totals = useMemo(() => {
     return rows.reduce(
@@ -49,16 +80,59 @@ export function PortfolioDashboard() {
   const pnlPercent = totals.costBasis ? (totals.profitLoss / totals.costBasis) * 100 : 0;
   const drawdownBreaches = rows.filter((row) => Math.abs(row.drawdownPercent) >= Number(drawdownLimit || 0));
   const drawdownRangeLabel = drawdownRanges.find((item) => item.value === drawdownRange)?.label || "1 year";
+  const sortedRows = useMemo(() => {
+    if (!sort) return rows;
+
+    return [...rows].sort((first, second) => {
+      const firstValue = getSortValue(first, sort.key);
+      const secondValue = getSortValue(second, sort.key);
+      const direction = sort.direction === "asc" ? 1 : -1;
+
+      if (typeof firstValue === "string" && typeof secondValue === "string") {
+        return firstValue.localeCompare(secondValue) * direction;
+      }
+
+      return (Number(firstValue) - Number(secondValue)) * direction;
+    });
+  }, [rows, sort]);
 
   async function fetchMarket(symbolInput: string, topRange = drawdownRange) {
     const url = new URL("/api/market", window.location.origin);
     url.searchParams.set("symbol", symbolInput);
     url.searchParams.set("range", "1y");
     url.searchParams.set("drawdownRange", topRange);
-    const response = await fetch(url);
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Unable to fetch market data");
-    return payload as MarketData;
+    try {
+      const response = await fetch(url);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to fetch market data");
+      return payload as MarketData;
+    } catch {
+      return fallbackMarketData(symbolInput, "1y", topRange);
+    }
+  }
+
+  async function materializeDefaultPortfolio(seed: PortfolioSeed[], topRange = drawdownRange) {
+    if (!seed.length) {
+      setRows([]);
+      setHoldings([]);
+      setBootstrapped(true);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const markets = await Promise.all(seed.map((item) => fetchMarket(item.symbol, topRange)));
+      const convertedCostBases = await Promise.all(seed.map((item, index) => convertSeedCostBasis(item, markets[index], topRange)));
+      const nextHoldings = seed.map((item, index) => createHoldingFromPortfolioSeed(item, markets[index], convertedCostBases[index]));
+      const nextRows = nextHoldings.map((holding, index) => enrichHolding(holding, markets[index]));
+      skipNextRefresh.current = true;
+      setRows(nextRows);
+      setHoldings(nextHoldings);
+      window.localStorage.setItem(storageKey, JSON.stringify(nextHoldings));
+    } finally {
+      setLoading(false);
+      setBootstrapped(true);
+    }
   }
 
   async function refreshRows(nextHoldings = holdings, topRange = drawdownRange) {
@@ -88,6 +162,30 @@ export function PortfolioDashboard() {
 
   function removeHolding(id: string) {
     setHoldings((current) => current.filter((holding) => holding.id !== id));
+  }
+
+  function changeSort(key: SortKey) {
+    setSort((current) => {
+      if (current?.key === key) {
+        return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+      }
+
+      return { key, direction: key === "symbol" ? "asc" : "desc" };
+    });
+  }
+
+  async function convertSeedCostBasis(seed: PortfolioSeed, market: MarketData, topRange = drawdownRange) {
+    if (!Number.isFinite(seed.costBasis)) return undefined;
+
+    const fromCurrency = seed.costCurrency || market.currency;
+    if (fromCurrency === market.currency) return seed.costBasis;
+
+    if (fromCurrency === "THB" && market.currency === "USD") {
+      const fxMarket = await fetchMarket("THB=X", topRange);
+      return fxMarket.price > 0 ? seed.costBasis! / fxMarket.price : seed.costBasis;
+    }
+
+    return seed.costBasis;
   }
 
   return (
@@ -140,7 +238,7 @@ export function PortfolioDashboard() {
       <section className="grid gap-4 xl:grid-cols-[390px_1fr]">
         <section className="glass-panel rounded-3xl p-6">
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Holding Input</p>
-          <h2 className="mb-4 text-2xl font-black">Add stock to port</h2>
+          <h2 className="mb-4 text-2xl font-black">Add stock to portfolio</h2>
           <form onSubmit={addHolding} className="grid gap-3">
             <label className="field-shell grid gap-1 rounded-2xl px-4 py-3">
               <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Symbol</span>
@@ -156,8 +254,11 @@ export function PortfolioDashboard() {
             </label>
             <button className="min-h-12 rounded-2xl bg-gradient-to-r from-white to-[#8af5d6] font-black text-[#05110e]">Add holding</button>
           </form>
-          <button onClick={() => refreshRows(holdings, drawdownRange)} className="mt-3 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 font-bold text-slate-300 hover:text-white">
+          <button type="button" onClick={() => refreshRows(holdings, drawdownRange)} className="mt-3 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 font-bold text-slate-300 hover:text-white">
             {loading ? "Refreshing..." : "Refresh prices"}
+          </button>
+          <button type="button" onClick={() => materializeDefaultPortfolio(defaultPortfolio, drawdownRange)} className="mt-3 w-full rounded-2xl border border-cyan-signal/25 bg-cyan-signal/10 px-4 py-3 font-bold text-cyan-signal hover:text-white">
+            Reset to my-port.csv
           </button>
         </section>
 
@@ -170,24 +271,35 @@ export function PortfolioDashboard() {
             <table className="w-full min-w-[900px] border-collapse text-left">
               <thead className="text-xs uppercase tracking-wide text-slate-400">
                 <tr>
-                  <th className="px-6 py-4">Symbol</th>
-                  <th className="px-6 py-4">Qty</th>
-                  <th className="px-6 py-4">Buy</th>
-                  <th className="px-6 py-4">Now</th>
-                  <th className="px-6 py-4">Value</th>
-                  <th className="px-6 py-4">P/L</th>
-                  <th className="px-6 py-4">From Top</th>
+                  {sortableColumns.map((column) => (
+                    <th
+                      key={column.key}
+                      className="px-6 py-4"
+                      aria-sort={sort?.key === column.key ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => changeSort(column.key)}
+                        className="inline-flex min-h-8 items-center gap-2 rounded-full border border-transparent px-2 text-left font-black text-slate-400 transition hover:border-white/10 hover:bg-white/5 hover:text-white"
+                      >
+                        <span>{column.label}</span>
+                        <span className={sort?.key === column.key ? "text-cyan-signal" : "text-slate-600"}>
+                          {sort?.key === column.key ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}
+                        </span>
+                      </button>
+                    </th>
+                  ))}
                   <th className="px-6 py-4"></th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {sortedRows.map((row) => (
                   <tr key={row.id} className="border-t border-white/10">
                     <td className="px-6 py-4">
                       <strong className="block">{row.symbol}</strong>
                       <small className="text-slate-400">{row.name}</small>
                     </td>
-                    <td className="px-6 py-4">{row.quantity}</td>
+                    <td className="px-6 py-4">{quantityFormat(row.quantity)}</td>
                     <td className="px-6 py-4">{currencyFormat(row.buyPrice, row.currency)}</td>
                     <td className="px-6 py-4">{currencyFormat(row.currentPrice, row.currency)}</td>
                     <td className="px-6 py-4 font-black">{currencyFormat(row.marketValue, row.currency)}</td>
@@ -220,4 +332,16 @@ function Summary({ title, value, tone = "text-white" }: { title: string; value: 
       <strong className={`mt-2 block text-2xl font-black ${tone}`}>{value}</strong>
     </div>
   );
+}
+
+function quantityFormat(value: number) {
+  if (!Number.isFinite(value)) return "0";
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: value >= 1 ? 4 : 8
+  }).format(value);
+}
+
+function getSortValue(row: HoldingWithMarket, key: SortKey) {
+  if (key === "symbol") return row.symbol;
+  return row[key];
 }
