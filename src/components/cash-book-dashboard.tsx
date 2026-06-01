@@ -8,6 +8,8 @@ type YearFilter = number | "all";
 type ChartPeriod = "day" | "month" | "year";
 type DescriptionFilter = CashBookFlowType | "all";
 type CashBookSubpage = "overview" | "categories" | "graph" | "descriptions";
+type SortDirection = "asc" | "desc";
+type DescriptionSortField = "description" | "category" | "income" | "expense" | "net" | "count" | "latest";
 
 type AmountBucket = {
   income: number;
@@ -34,6 +36,8 @@ type DescriptionRow = {
   net: number;
   count: number;
   latestDate: string;
+  latestDateSortable: string;
+  transactions: CashBookTransaction[];
 };
 
 type ChartCategory = {
@@ -56,6 +60,20 @@ type ChartRow = {
   total: number;
   segments: ChartSegment[];
 };
+
+type MonthlyCashRow = AmountBucket & {
+  key: string;
+  label: string;
+  net: number;
+  transactions: CashBookTransaction[];
+  expenses: CashBookTransaction[];
+};
+
+type TransactionModalState = {
+  eyebrow: string;
+  title: string;
+  transactions: CashBookTransaction[];
+} | null;
 
 const monthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const chartPeriods: Array<{ value: ChartPeriod; label: string }> = [
@@ -84,7 +102,13 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
   const [chartCategory, setChartCategory] = useState("all");
   const [selectedChartKey, setSelectedChartKey] = useState("");
   const [descriptionFilter, setDescriptionFilter] = useState<DescriptionFilter>("expense");
+  const [descriptionQuery, setDescriptionQuery] = useState("");
+  const [descriptionSort, setDescriptionSort] = useState<{ field: DescriptionSortField; direction: SortDirection }>({
+    field: "expense",
+    direction: "desc"
+  });
   const [activeSubpage, setActiveSubpage] = useState<CashBookSubpage>("overview");
+  const [transactionModal, setTransactionModal] = useState<TransactionModalState>(null);
 
   const filteredTransactions = useMemo(() => {
     if (selectedYear === "all") return transactions;
@@ -94,9 +118,13 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
   const monthColumns = useMemo(() => buildMonthColumns(filteredTransactions, selectedYear), [filteredTransactions, selectedYear]);
   const totals = useMemo(() => summarizeTransactions(filteredTransactions), [filteredTransactions]);
   const yearRows = useMemo(() => buildYearRows(transactions), [transactions]);
+  const monthlyRows = useMemo(() => buildMonthlyRows(filteredTransactions, monthColumns), [filteredTransactions, monthColumns]);
   const categoryRows = useMemo(() => buildCategoryRows(filteredTransactions, "category", "alpha"), [filteredTransactions]);
   const groupRows = useMemo(() => buildCategoryRows(filteredTransactions, "group", "expense"), [filteredTransactions]);
-  const descriptionRows = useMemo(() => buildDescriptionRows(filteredTransactions, descriptionFilter), [descriptionFilter, filteredTransactions]);
+  const descriptionRows = useMemo(
+    () => buildDescriptionRows(filteredTransactions, descriptionFilter, descriptionQuery, descriptionSort),
+    [descriptionFilter, descriptionQuery, descriptionSort, filteredTransactions]
+  );
   const chartCategories = useMemo(() => buildChartCategories(filteredTransactions), [filteredTransactions]);
   const categoryOptions = useMemo(() => chartCategories.map((row) => row.category), [chartCategories]);
   const activeChartCategory = chartCategory === "all" || categoryOptions.includes(chartCategory) ? chartCategory : "all";
@@ -114,7 +142,54 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
   function selectYear(year: YearFilter) {
     setSelectedChartKey("");
     setExpandedCategory("");
+    setTransactionModal(null);
     setSelectedYear(year);
+  }
+
+  function toggleDescriptionSort(field: DescriptionSortField) {
+    setDescriptionSort((current) => ({
+      field,
+      direction: current.field === field && current.direction === "desc" ? "asc" : "desc"
+    }));
+  }
+
+  function openTransactionModal(eyebrow: string, title: string, rows: CashBookTransaction[]) {
+    setTransactionModal({
+      eyebrow,
+      title,
+      transactions: sortTransactions(rows)
+    });
+  }
+
+  function openCategoryCell(row: CategoryRow, columnKey: string, type: CashBookFlowType) {
+    const rows = row.transactions.filter((transaction) => transaction.monthKey === columnKey && transaction.type === type);
+    const columnLabel = monthColumns.find((column) => column.key === columnKey)?.label || columnKey;
+    openTransactionModal(`${columnLabel} / ${type}`, row.category, rows);
+  }
+
+  function openCategoryTotal(row: CategoryRow, type: CashBookFlowType) {
+    openTransactionModal(`${selectedYearLabel} / ${type}`, row.category, row.transactions.filter((transaction) => transaction.type === type));
+  }
+
+  function openCategoryNet(row: CategoryRow) {
+    openTransactionModal(`${selectedYearLabel} / Net`, row.category, row.transactions);
+  }
+
+  function openDescriptionRow(row: DescriptionRow) {
+    openTransactionModal(`${selectedYearLabel} / Description`, row.description, row.transactions);
+  }
+
+  function openExpenseMix(row: ChartSegment | ChartCategory) {
+    const scopedTransactions = filteredTransactions.filter((transaction) => {
+      if (transaction.type !== "expense" || transaction.category !== row.category) return false;
+      return selectedChartRow ? chartKey(transaction, chartPeriod) === selectedChartRow.key : true;
+    });
+
+    openTransactionModal(
+      `${selectedChartRow ? selectedChartRow.label : selectedYearLabel} / Expense`,
+      row.category,
+      scopedTransactions
+    );
   }
 
   return (
@@ -215,7 +290,24 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
 
           <section className="glass-panel overflow-hidden rounded-3xl">
             <SectionHeading eyebrow={`${selectedYearLabel} Group Summary`} title="Monthly conclusion by cash group" />
-            <MonthTable rows={groupRows} columns={monthColumns} labelHeader="Group" />
+            <MonthTable
+              rows={groupRows}
+              columns={monthColumns}
+              labelHeader="Group"
+              onOpenIncome={(row, columnKey) => openCategoryCell(row, columnKey, "income")}
+              onOpenExpense={(row, columnKey) => openCategoryCell(row, columnKey, "expense")}
+              onOpenTotalIncome={(row) => openCategoryTotal(row, "income")}
+              onOpenTotalExpense={(row) => openCategoryTotal(row, "expense")}
+              onOpenTotalNet={openCategoryNet}
+            />
+          </section>
+
+          <section className="glass-panel overflow-hidden rounded-3xl">
+            <SectionHeading eyebrow={`${selectedYearLabel} Monthly Expense`} title="All expense by month" />
+            <MonthlyExpenseTable
+              rows={monthlyRows}
+              onOpen={(row) => openTransactionModal(`${row.label} / Expense`, "Monthly expense transactions", row.expenses)}
+            />
           </section>
         </>
       )}
@@ -260,11 +352,19 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
                     </td>
                     {monthColumns.map((column) => (
                       <td key={column.key} className="px-4 py-4 text-right">
-                        <AmountPair bucket={row.months.get(column.key)} />
+                        <AmountPair
+                          bucket={row.months.get(column.key)}
+                          onOpenIncome={() => openCategoryCell(row, column.key, "income")}
+                          onOpenExpense={() => openCategoryCell(row, column.key, "expense")}
+                        />
                       </td>
                     ))}
-                    <td className="px-4 py-4 text-right font-black text-mint-signal">{compactMoney(row.income)}</td>
-                    <td className="px-4 py-4 text-right font-black text-rose-signal">{compactMoney(row.expense)}</td>
+                    <td className="px-4 py-4 text-right">
+                      <AmountButton value={row.income} tone="income" onOpen={() => openCategoryTotal(row, "income")} />
+                    </td>
+                    <td className="px-4 py-4 text-right">
+                      <AmountButton value={row.expense} tone="expense" onOpen={() => openCategoryTotal(row, "expense")} />
+                    </td>
                     <td className={`px-4 py-4 text-right font-black ${row.net >= 0 ? "text-cyan-signal" : "text-amber-signal"}`}>
                       {compactMoney(row.net)}
                     </td>
@@ -378,18 +478,18 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
           </div>
           <div className="grid gap-3">
             {expenseMix.map((row) => (
-              <div key={row.category} className="grid gap-2">
-                <div className="flex items-center justify-between gap-3">
-                    <span className="flex min-w-0 items-center gap-3">
+              <button key={row.category} type="button" onClick={() => openExpenseMix(row)} className="grid gap-2 rounded-2xl border border-white/0 p-2 text-left transition hover:border-cyan-signal/25 hover:bg-white/5">
+                <span className="flex items-center justify-between gap-3">
+                  <span className="flex min-w-0 items-center gap-3">
                     <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: row.color }} />
                     <strong className="truncate">{row.category}</strong>
                   </span>
                   <span className="whitespace-nowrap text-sm font-black text-slate-300">{money(row.value)}</span>
-                </div>
+                </span>
                 <div className="h-2 overflow-hidden rounded-full bg-white/10">
                   <div className="h-full rounded-full bg-gradient-to-r from-rose-signal via-amber-signal to-cyan-signal" style={{ width: `${percentage(row.value, expenseMixTotal)}%` }} />
                 </div>
-              </div>
+              </button>
             ))}
             {!expenseMix.length && <p className="text-sm text-slate-400">No expense rows in this period.</p>}
           </div>
@@ -399,35 +499,65 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
 
       {activeSubpage === "descriptions" && (
         <section className="glass-panel overflow-hidden rounded-3xl">
-        <div className="flex flex-col gap-4 border-b border-white/10 p-6 md:flex-row md:items-end md:justify-between">
+        <div className="flex flex-col gap-4 border-b border-white/10 p-6 xl:flex-row xl:items-end xl:justify-between">
           <div>
             <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">{selectedYearLabel} Description Rollup</p>
             <h2 className="text-2xl font-black">Income or expense by transaction description</h2>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {descriptionFilters.map((filter) => (
-              <button key={filter.value} type="button" onClick={() => setDescriptionFilter(filter.value)} className={chipClass(descriptionFilter === filter.value)}>
-                {filter.label}
-              </button>
-            ))}
+          <div className="grid gap-3 md:grid-cols-[minmax(240px,1fr)_auto] md:items-center">
+            <label className="field-shell flex min-h-11 items-center gap-3 rounded-2xl px-4">
+              <span className="text-xs font-black uppercase tracking-wide text-slate-400">Search</span>
+              <input
+                value={descriptionQuery}
+                onChange={(event) => setDescriptionQuery(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none placeholder:text-slate-500"
+                placeholder="description category memo amount"
+                aria-label="Search descriptions"
+              />
+              {descriptionQuery && (
+                <button type="button" onClick={() => setDescriptionQuery("")} className="text-xs font-black text-cyan-signal">
+                  Clear
+                </button>
+              )}
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {descriptionFilters.map((filter) => (
+                <button key={filter.value} type="button" onClick={() => setDescriptionFilter(filter.value)} className={chipClass(descriptionFilter === filter.value)}>
+                  {filter.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[860px] border-collapse text-left">
             <thead className="text-xs uppercase tracking-wide text-slate-400">
               <tr>
-                <th className="px-6 py-4">Description</th>
-                <th className="px-6 py-4">Category</th>
-                <th className="px-6 py-4 text-right">Income</th>
-                <th className="px-6 py-4 text-right">Expense</th>
-                <th className="px-6 py-4 text-right">Net</th>
-                <th className="px-6 py-4 text-right">Count</th>
-                <th className="px-6 py-4">Latest</th>
+                <SortableHead label="Description" field="description" sort={descriptionSort} onSort={toggleDescriptionSort} />
+                <SortableHead label="Category" field="category" sort={descriptionSort} onSort={toggleDescriptionSort} />
+                <SortableHead label="Income" field="income" sort={descriptionSort} onSort={toggleDescriptionSort} align="right" />
+                <SortableHead label="Expense" field="expense" sort={descriptionSort} onSort={toggleDescriptionSort} align="right" />
+                <SortableHead label="Net" field="net" sort={descriptionSort} onSort={toggleDescriptionSort} align="right" />
+                <SortableHead label="Count" field="count" sort={descriptionSort} onSort={toggleDescriptionSort} align="right" />
+                <SortableHead label="Latest" field="latest" sort={descriptionSort} onSort={toggleDescriptionSort} />
               </tr>
             </thead>
             <tbody>
               {descriptionRows.map((row) => (
-                <tr key={row.description} className="border-t border-white/10">
+                <tr
+                  key={row.description}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open ${row.description} transactions`}
+                  onClick={() => openDescriptionRow(row)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      openDescriptionRow(row);
+                    }
+                  }}
+                  className="cursor-pointer border-t border-white/10 transition hover:bg-white/[0.04] focus:bg-white/[0.04] focus:outline-none focus:ring-2 focus:ring-cyan-signal/40 focus:ring-inset"
+                >
                   <td className="px-6 py-4 font-black">{row.description}</td>
                   <td className="px-6 py-4 text-slate-300">{row.categories.join(", ")}</td>
                   <td className="px-6 py-4 text-right font-black text-mint-signal">{money(row.income)}</td>
@@ -437,11 +567,20 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
                   <td className="px-6 py-4 text-slate-300">{row.latestDate}</td>
                 </tr>
               ))}
+              {!descriptionRows.length && (
+                <tr className="border-t border-white/10">
+                  <td colSpan={7} className="px-6 py-10 text-center text-sm text-slate-400">
+                    No matching descriptions.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
       </section>
       )}
+
+      {transactionModal && <TransactionModal modal={transactionModal} onClose={() => setTransactionModal(null)} />}
     </div>
   );
 }
@@ -464,7 +603,54 @@ function Metric({ title, value, tone = "text-white" }: { title: string; value: s
   );
 }
 
-function MonthTable({ rows, columns, labelHeader }: { rows: CategoryRow[]; columns: Array<{ key: string; label: string }>; labelHeader: string }) {
+function SortableHead({
+  label,
+  field,
+  sort,
+  onSort,
+  align = "left"
+}: {
+  label: string;
+  field: DescriptionSortField;
+  sort: { field: DescriptionSortField; direction: SortDirection };
+  onSort: (field: DescriptionSortField) => void;
+  align?: "left" | "right";
+}) {
+  const active = sort.field === field;
+
+  return (
+    <th className={`px-6 py-4 ${align === "right" ? "text-right" : "text-left"}`}>
+      <button
+        type="button"
+        onClick={() => onSort(field)}
+        className={`inline-flex items-center gap-2 rounded-xl px-2 py-1 font-black transition hover:bg-white/8 hover:text-white ${align === "right" ? "justify-end" : ""}`}
+      >
+        <span>{label}</span>
+        <span className={active ? "text-cyan-signal" : "text-slate-600"}>{active ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}</span>
+      </button>
+    </th>
+  );
+}
+
+function MonthTable({
+  rows,
+  columns,
+  labelHeader,
+  onOpenIncome,
+  onOpenExpense,
+  onOpenTotalIncome,
+  onOpenTotalExpense,
+  onOpenTotalNet
+}: {
+  rows: CategoryRow[];
+  columns: Array<{ key: string; label: string }>;
+  labelHeader: string;
+  onOpenIncome?: (row: CategoryRow, columnKey: string) => void;
+  onOpenExpense?: (row: CategoryRow, columnKey: string) => void;
+  onOpenTotalIncome?: (row: CategoryRow) => void;
+  onOpenTotalExpense?: (row: CategoryRow) => void;
+  onOpenTotalNet?: (row: CategoryRow) => void;
+}) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[1120px] border-collapse text-left">
@@ -492,12 +678,22 @@ function MonthTable({ rows, columns, labelHeader }: { rows: CategoryRow[]; colum
               </td>
               {columns.map((column) => (
                 <td key={column.key} className="px-4 py-4 text-right">
-                  <AmountPair bucket={row.months.get(column.key)} />
+                  <AmountPair
+                    bucket={row.months.get(column.key)}
+                    onOpenIncome={onOpenIncome ? () => onOpenIncome(row, column.key) : undefined}
+                    onOpenExpense={onOpenExpense ? () => onOpenExpense(row, column.key) : undefined}
+                  />
                 </td>
               ))}
-              <td className="px-4 py-4 text-right font-black text-mint-signal">{compactMoney(row.income)}</td>
-              <td className="px-4 py-4 text-right font-black text-rose-signal">{compactMoney(row.expense)}</td>
-              <td className={`px-4 py-4 text-right font-black ${row.net >= 0 ? "text-cyan-signal" : "text-amber-signal"}`}>{compactMoney(row.net)}</td>
+              <td className="px-4 py-4 text-right">
+                <AmountButton value={row.income} tone="income" onOpen={onOpenTotalIncome ? () => onOpenTotalIncome(row) : undefined} />
+              </td>
+              <td className="px-4 py-4 text-right">
+                <AmountButton value={row.expense} tone="expense" onOpen={onOpenTotalExpense ? () => onOpenTotalExpense(row) : undefined} />
+              </td>
+              <td className="px-4 py-4 text-right">
+                <SignedAmountButton value={row.net} onOpen={onOpenTotalNet && row.count ? () => onOpenTotalNet(row) : undefined} />
+              </td>
             </tr>
           ))}
         </tbody>
@@ -506,14 +702,106 @@ function MonthTable({ rows, columns, labelHeader }: { rows: CategoryRow[]; colum
   );
 }
 
-function AmountPair({ bucket }: { bucket?: AmountBucket }) {
+function MonthlyExpenseTable({ rows, onOpen }: { rows: MonthlyCashRow[]; onOpen: (row: MonthlyCashRow) => void }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[760px] border-collapse text-left">
+        <thead className="text-xs uppercase tracking-wide text-slate-400">
+          <tr>
+            <th className="px-6 py-4">Month</th>
+            <th className="px-6 py-4 text-right">Income</th>
+            <th className="px-6 py-4 text-right">Expense</th>
+            <th className="px-6 py-4 text-right">Net</th>
+            <th className="px-6 py-4 text-right">Transactions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key} className="border-t border-white/10">
+              <td className="px-6 py-4 font-black">{row.label}</td>
+              <td className="px-6 py-4 text-right font-black text-mint-signal">{money(row.income)}</td>
+              <td className="px-6 py-4 text-right">
+                <button
+                  type="button"
+                  onClick={() => onOpen(row)}
+                  disabled={!row.expense}
+                  className="rounded-xl px-2 py-1 text-right font-black text-rose-signal transition enabled:hover:bg-rose-signal/10 enabled:hover:ring-1 enabled:hover:ring-rose-signal/35 disabled:cursor-default disabled:opacity-50"
+                >
+                  {money(row.expense)}
+                </button>
+              </td>
+              <td className={`px-6 py-4 text-right font-black ${row.net >= 0 ? "text-cyan-signal" : "text-amber-signal"}`}>{money(row.net)}</td>
+              <td className="px-6 py-4 text-right text-slate-300">{numberFormat(row.count)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AmountPair({
+  bucket,
+  onOpenIncome,
+  onOpenExpense
+}: {
+  bucket?: AmountBucket;
+  onOpenIncome?: () => void;
+  onOpenExpense?: () => void;
+}) {
   if (!bucket || (!bucket.income && !bucket.expense)) return <span className="text-slate-600">-</span>;
 
   return (
     <span className="grid gap-1 text-xs leading-tight">
-      {bucket.income > 0 && <span className="font-black text-mint-signal">+{compactMoney(bucket.income)}</span>}
-      {bucket.expense > 0 && <span className="font-black text-rose-signal">-{compactMoney(bucket.expense)}</span>}
+      {bucket.income > 0 && <AmountButton value={bucket.income} tone="income" onOpen={onOpenIncome} compact prefix="+" />}
+      {bucket.expense > 0 && <AmountButton value={bucket.expense} tone="expense" onOpen={onOpenExpense} compact prefix="-" />}
     </span>
+  );
+}
+
+function AmountButton({
+  value,
+  tone,
+  onOpen,
+  compact = true,
+  prefix = ""
+}: {
+  value: number;
+  tone: CashBookFlowType;
+  onOpen?: () => void;
+  compact?: boolean;
+  prefix?: string;
+}) {
+  const color = tone === "income" ? "text-mint-signal" : "text-rose-signal";
+  const label = `${prefix}${compact ? compactMoney(value) : money(value)}`;
+
+  if (!value || !onOpen) return <span className={`font-black ${color}`}>{label}</span>;
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`rounded-xl px-2 py-1 text-right font-black transition hover:bg-white/8 hover:ring-1 hover:ring-white/15 ${color}`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function SignedAmountButton({ value, onOpen }: { value: number; onOpen?: () => void }) {
+  const color = value >= 0 ? "text-cyan-signal" : "text-amber-signal";
+  const label = compactMoney(value);
+
+  if (!onOpen) return <span className={`font-black ${color}`}>{label}</span>;
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`rounded-xl px-2 py-1 text-right font-black transition hover:bg-white/8 hover:ring-1 hover:ring-white/15 ${color}`}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -530,6 +818,67 @@ function MemoTooltip({ memo }: { memo: string }) {
         {memo}
       </span>
     </span>
+  );
+}
+
+function TransactionModal({ modal, onClose }: { modal: NonNullable<TransactionModalState>; onClose: () => void }) {
+  const totals = summarizeTransactions(modal.transactions);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-void/80 p-3 backdrop-blur-xl sm:p-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label={modal.title}
+      onClick={onClose}
+    >
+      <div
+        className="glass-panel grid max-h-[92vh] w-full max-w-6xl grid-rows-[auto_auto_1fr] overflow-hidden rounded-3xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex flex-col gap-4 border-b border-white/10 p-5 md:flex-row md:items-start md:justify-between">
+          <div className="min-w-0">
+            <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">{modal.eyebrow}</p>
+            <h2 className="break-words text-2xl font-black md:text-3xl">{modal.title}</h2>
+          </div>
+          <button type="button" onClick={onClose} className={chipClass(false)}>
+            Close
+          </button>
+        </div>
+        <div className="grid gap-3 border-b border-white/10 p-5 sm:grid-cols-4">
+          <Metric title="Transactions" value={numberFormat(modal.transactions.length)} />
+          <Metric title="Income" value={money(totals.income)} tone="text-mint-signal" />
+          <Metric title="Expense" value={money(totals.expense)} tone="text-rose-signal" />
+          <Metric title="Net" value={money(totals.net)} tone={totals.net >= 0 ? "text-cyan-signal" : "text-amber-signal"} />
+        </div>
+        <div className="overflow-auto p-5">
+          <div className="grid gap-3">
+            {modal.transactions.map((transaction) => (
+              <article key={transaction.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4" title={transaction.memo || transaction.description}>
+                <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-start">
+                  <div className="min-w-0">
+                    <strong className="block break-words text-white">{transaction.description}</strong>
+                    <span className="text-sm text-slate-400">
+                      {transaction.dateLabel} {transaction.time} / {transaction.category}
+                    </span>
+                  </div>
+                  <span className={`whitespace-nowrap text-right font-black ${transaction.type === "income" ? "text-mint-signal" : "text-rose-signal"}`}>
+                    {money(transaction.amount)}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{transaction.account || "Account"}</span>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{transaction.file}</span>
+                  {transaction.tags && <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{transaction.tags}</span>}
+                  <MemoTooltip memo={transaction.memo} />
+                </div>
+              </article>
+            ))}
+            {!modal.transactions.length && <p className="py-12 text-center text-sm text-slate-400">No transactions in this selection.</p>}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -708,7 +1057,30 @@ function addAmount(row: CategoryRow, transaction: CashBookTransaction) {
   row.months.set(transaction.monthKey, month);
 }
 
-function buildDescriptionRows(transactions: CashBookTransaction[], filter: DescriptionFilter) {
+function buildMonthlyRows(transactions: CashBookTransaction[], columns: Array<{ key: string; label: string }>) {
+  return columns.map((column) => {
+    const monthTransactions = transactions.filter((transaction) => transaction.monthKey === column.key);
+    const summary = summarizeTransactions(monthTransactions);
+
+    return {
+      key: column.key,
+      label: column.label,
+      income: summary.income,
+      expense: summary.expense,
+      net: summary.net,
+      count: monthTransactions.length,
+      transactions: monthTransactions,
+      expenses: monthTransactions.filter((transaction) => transaction.type === "expense")
+    } satisfies MonthlyCashRow;
+  });
+}
+
+function buildDescriptionRows(
+  transactions: CashBookTransaction[],
+  filter: DescriptionFilter,
+  query: string,
+  sort: { field: DescriptionSortField; direction: SortDirection }
+) {
   const rows = new Map<string, DescriptionRow>();
 
   transactions.forEach((transaction) => {
@@ -720,7 +1092,9 @@ function buildDescriptionRows(transactions: CashBookTransaction[], filter: Descr
       expense: 0,
       net: 0,
       count: 0,
-      latestDate: transaction.dateLabel
+      latestDate: transaction.dateLabel,
+      latestDateSortable: transaction.date,
+      transactions: []
     };
 
     if (!current.categories.includes(transaction.category)) current.categories.push(transaction.category);
@@ -728,19 +1102,53 @@ function buildDescriptionRows(transactions: CashBookTransaction[], filter: Descr
     if (transaction.amount < 0) current.expense += Math.abs(transaction.amount);
     current.net += transaction.amount;
     current.count += 1;
-    if (transaction.date > toSortableDate(current.latestDate)) current.latestDate = transaction.dateLabel;
+    if (transaction.date > current.latestDateSortable) {
+      current.latestDate = transaction.dateLabel;
+      current.latestDateSortable = transaction.date;
+    }
+    current.transactions.push(transaction);
     rows.set(key, current);
   });
 
+  const queryTerms = normalizeSearch(query).split(" ").filter(Boolean);
+
   return Array.from(rows.values())
     .filter((row) => (filter === "all" ? true : filter === "income" ? row.income > 0 : row.expense > 0))
-    .sort((first, second) => sortValue(second, filter) - sortValue(first, filter) || first.description.localeCompare(second.description));
+    .filter((row) => matchesDescriptionSearch(row, queryTerms))
+    .sort((first, second) => compareDescriptionRows(first, second, sort));
 }
 
-function sortValue(row: DescriptionRow, filter: DescriptionFilter) {
-  if (filter === "income") return row.income;
-  if (filter === "expense") return row.expense;
-  return Math.abs(row.net);
+function matchesDescriptionSearch(row: DescriptionRow, queryTerms: string[]) {
+  if (!queryTerms.length) return true;
+
+  const haystack = normalizeSearch(
+    [
+      row.description,
+      row.categories.join(" "),
+      money(row.income),
+      money(row.expense),
+      money(row.net),
+      numberFormat(row.count),
+      row.latestDate
+    ].join(" ")
+  );
+
+  return queryTerms.every((term) => haystack.includes(term));
+}
+
+function compareDescriptionRows(first: DescriptionRow, second: DescriptionRow, sort: { field: DescriptionSortField; direction: SortDirection }) {
+  const direction = sort.direction === "asc" ? 1 : -1;
+  let value = 0;
+
+  if (sort.field === "description") value = first.description.localeCompare(second.description);
+  if (sort.field === "category") value = first.categories.join(", ").localeCompare(second.categories.join(", "));
+  if (sort.field === "income") value = first.income - second.income;
+  if (sort.field === "expense") value = first.expense - second.expense;
+  if (sort.field === "net") value = first.net - second.net;
+  if (sort.field === "count") value = first.count - second.count;
+  if (sort.field === "latest") value = first.latestDateSortable.localeCompare(second.latestDateSortable);
+
+  return value * direction || first.description.localeCompare(second.description);
 }
 
 function buildYearRows(transactions: CashBookTransaction[]) {
@@ -949,8 +1357,20 @@ function numberFormat(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-function toSortableDate(dateLabel: string) {
-  const [day, month, year] = dateLabel.split("/").map(Number);
-  if (!day || !month || !year) return "";
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+function sortTransactions(transactions: CashBookTransaction[]) {
+  return [...transactions].sort(
+    (first, second) =>
+      Math.abs(second.amount) - Math.abs(first.amount) ||
+      second.date.localeCompare(first.date) ||
+      second.time.localeCompare(first.time)
+  );
+}
+
+function normalizeSearch(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}.-]+/gu, " ")
+    .trim();
 }

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { SiteNav } from "@/components/site-nav";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -33,37 +34,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                 <small className="block text-sm text-slate-400">market signal console</small>
               </span>
             </Link>
-            <nav className="glass-panel justify-self-stretch rounded-3xl p-2 lg:justify-self-end">
-              <div className="grid gap-2 sm:flex sm:items-center sm:justify-end">
-                <Link className="rounded-2xl px-4 py-3 text-sm font-bold text-slate-300 transition hover:bg-white/8 hover:text-white" href="/">
-                  Market Watch
-                </Link>
-                <Link
-                  className="rounded-2xl px-4 py-3 text-sm font-bold text-slate-300 transition hover:bg-white/8 hover:text-white"
-                  href="/portfolio"
-                >
-                  My Portfolio
-                </Link>
-                <Link
-                  className="rounded-2xl px-4 py-3 text-sm font-bold text-slate-300 transition hover:bg-white/8 hover:text-white"
-                  href="/watchlist"
-                >
-                  My Watchlist
-                </Link>
-                <Link
-                  className="rounded-2xl px-4 py-3 text-sm font-bold text-slate-300 transition hover:bg-white/8 hover:text-white"
-                  href="/allocation"
-                >
-                  Allocation
-                </Link>
-                <Link
-                  className="rounded-2xl px-4 py-3 text-sm font-bold text-slate-300 transition hover:bg-white/8 hover:text-white"
-                  href="/cash-book"
-                >
-                  Cash Book
-                </Link>
-              </div>
-            </nav>
+            <SiteNav />
           </header>
           {children}
         </main>
