@@ -15,6 +15,13 @@ export type PortfolioSeed = {
   costCurrency?: string;
 };
 
+export type AllocationRule = {
+  category: string;
+  symbol: string;
+  cashValue?: number;
+  cashCurrency?: string;
+};
+
 export type HoldingWithMarket = Holding & {
   name: string;
   currentPrice: number;

@@ -16,6 +16,7 @@ Open `http://localhost:3000`.
 - `/` market watch dashboard with TradingView-style chart, watchlist, price alerts, and drawdown-from-top alerts
 - `/portfolio` holdings tracker seeded from `public/my-port.csv` with calculated buy price, quantity, live market value, total net worth, P/L, and drawdown flags
 - `/watchlist` watchlist tracker with live prices, one-year moves, and drawdown flags
+- `/allocation` allocation chart and category table based on `public/my-allocation.csv`
 
 ## Symbols
 
@@ -44,6 +45,10 @@ Browser notifications require enabling the notification toggle and approving the
 ## Portfolio CSV
 
 `public/my-port.csv` supports either `holding value` + `% profit`, or `quantity` + `cost basis` + `cost currency` for positions such as bitcoin bought in THB.
+
+`public/my-allocation.csv` maps portfolio symbols into allocation categories and can include a `Cash` row with `cash value` + `cash currency`.
+
+Portfolio, watchlist, and allocation pages can display USD values in THB using the Bank of Thailand USD/THB reference rate API. Set `BOT_API_KEY` in your environment before running the app.
 
 ## Docker
 

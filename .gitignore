@@ -1,3 +1,5 @@
 .next
 node_modules
+my-allocation.csv
 my-port.csv
+.env

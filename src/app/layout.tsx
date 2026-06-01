@@ -50,6 +50,12 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                 >
                   My Watchlist
                 </Link>
+                <Link
+                  className="rounded-2xl px-4 py-3 text-sm font-bold text-slate-300 transition hover:bg-white/8 hover:text-white"
+                  href="/allocation"
+                >
+                  Allocation
+                </Link>
               </div>
             </nav>
           </header>

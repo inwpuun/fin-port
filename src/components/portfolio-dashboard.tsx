@@ -16,6 +16,14 @@ type PortfolioSort = {
   direction: SortDirection;
 };
 
+type DisplayCurrency = "USD" | "THB";
+
+type UsdThbRate = {
+  rate: number;
+  period: string;
+  source: string;
+};
+
 const sortableColumns: Array<{ key: SortKey; label: string }> = [
   { key: "symbol", label: "Symbol" },
   { key: "quantity", label: "Qty" },
@@ -37,6 +45,10 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
   const [drawdownRange, setDrawdownRange] = useState<DrawdownRange>("1y");
   const [loading, setLoading] = useState(false);
   const [bootstrapped, setBootstrapped] = useState(false);
+  const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>("USD");
+  const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(null);
+  const [fxLoading, setFxLoading] = useState(false);
+  const [fxError, setFxError] = useState("");
   const skipNextRefresh = useRef(false);
 
   useEffect(() => {
@@ -188,6 +200,32 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
     return seed.costBasis;
   }
 
+  async function toggleThbDisplay() {
+    if (displayCurrency === "THB") {
+      setDisplayCurrency("USD");
+      setFxError("");
+      return;
+    }
+
+    setFxLoading(true);
+    setFxError("");
+    try {
+      const response = await fetch("/api/exchange-rate/usd-thb");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to load USD/THB exchange rate");
+      setUsdThbRate(payload as UsdThbRate);
+      setDisplayCurrency("THB");
+    } catch (error) {
+      setFxError(error instanceof Error ? error.message : "Unable to load USD/THB exchange rate");
+    } finally {
+      setFxLoading(false);
+    }
+  }
+
+  function formatMoney(value: number, currency = "USD") {
+    return formatDisplayMoney(value, currency, displayCurrency, usdThbRate?.rate);
+  }
+
   return (
     <div className="grid gap-4">
       <section className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
@@ -195,9 +233,9 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">My Portfolio</p>
           <h1 className="max-w-4xl font-serif text-5xl leading-none md:text-7xl">Net worth radar for every position.</h1>
           <div className="mt-8 grid gap-3 md:grid-cols-3">
-            <Summary title="Net Worth" value={currencyFormat(totals.marketValue)} />
-            <Summary title="Cost Basis" value={currencyFormat(totals.costBasis)} />
-            <Summary title="Total P/L" value={`${currencyFormat(totals.profitLoss)} ${percentFormat(pnlPercent)}`} tone={totals.profitLoss >= 0 ? "text-mint-signal" : "text-rose-signal"} />
+            <Summary title="Net Worth" value={formatMoney(totals.marketValue)} />
+            <Summary title="Cost Basis" value={formatMoney(totals.costBasis)} />
+            <Summary title="Total P/L" value={`${formatMoney(totals.profitLoss)} ${percentFormat(pnlPercent)}`} tone={totals.profitLoss >= 0 ? "text-mint-signal" : "text-rose-signal"} />
           </div>
         </article>
 
@@ -260,6 +298,15 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
           <button type="button" onClick={() => materializeDefaultPortfolio(defaultPortfolio, drawdownRange)} className="mt-3 w-full rounded-2xl border border-cyan-signal/25 bg-cyan-signal/10 px-4 py-3 font-bold text-cyan-signal hover:text-white">
             Reset to my-port.csv
           </button>
+          <button type="button" onClick={toggleThbDisplay} className="mt-3 w-full rounded-2xl border border-amber-signal/30 bg-amber-signal/10 px-4 py-3 font-bold text-amber-signal hover:text-white">
+            {fxLoading ? "Loading BOT rate..." : displayCurrency === "THB" ? "Show USD" : "Convert USD to THB"}
+          </button>
+          {usdThbRate && (
+            <p className="mt-3 text-sm text-slate-400">
+              USD/THB {usdThbRate.rate.toFixed(4)} from {usdThbRate.source}, {usdThbRate.period}.
+            </p>
+          )}
+          {fxError && <p className="mt-3 text-sm text-rose-signal">{fxError}</p>}
         </section>
 
         <section className="glass-panel overflow-hidden rounded-3xl">
@@ -300,11 +347,11 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
                       <small className="text-slate-400">{row.name}</small>
                     </td>
                     <td className="px-6 py-4">{quantityFormat(row.quantity)}</td>
-                    <td className="px-6 py-4">{currencyFormat(row.buyPrice, row.currency)}</td>
-                    <td className="px-6 py-4">{currencyFormat(row.currentPrice, row.currency)}</td>
-                    <td className="px-6 py-4 font-black">{currencyFormat(row.marketValue, row.currency)}</td>
+                    <td className="px-6 py-4">{formatMoney(row.buyPrice, row.currency)}</td>
+                    <td className="px-6 py-4">{formatMoney(row.currentPrice, row.currency)}</td>
+                    <td className="px-6 py-4 font-black">{formatMoney(row.marketValue, row.currency)}</td>
                     <td className={`px-6 py-4 font-black ${row.profitLoss >= 0 ? "text-mint-signal" : "text-rose-signal"}`}>
-                      {currencyFormat(row.profitLoss, row.currency)} {percentFormat(row.profitLossPercent)}
+                      {formatMoney(row.profitLoss, row.currency)} {percentFormat(row.profitLossPercent)}
                     </td>
                     <td className={`px-6 py-4 font-black ${Math.abs(row.drawdownPercent) >= Number(drawdownLimit || 0) ? "text-amber-signal" : "text-slate-300"}`}>
                       {percentFormat(row.drawdownPercent)}
@@ -344,4 +391,12 @@ function quantityFormat(value: number) {
 function getSortValue(row: HoldingWithMarket, key: SortKey) {
   if (key === "symbol") return row.symbol;
   return row[key];
+}
+
+function formatDisplayMoney(value: number, sourceCurrency: string, displayCurrency: DisplayCurrency, usdThbRate?: number) {
+  if (displayCurrency === "THB" && sourceCurrency === "USD" && usdThbRate) {
+    return currencyFormat(value * usdThbRate, "THB");
+  }
+
+  return currencyFormat(value, sourceCurrency);
 }

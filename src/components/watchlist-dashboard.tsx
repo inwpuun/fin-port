@@ -12,15 +12,44 @@ type WatchlistRow = MarketData & {
   requestSymbol: string;
 };
 
+type SortKey = "symbol" | "price" | "changePercent" | "rangeChange" | "drawdownPercent" | "previousTop";
+type SortDirection = "asc" | "desc";
+type WatchlistSort = {
+  key: SortKey;
+  direction: SortDirection;
+};
+
+type DisplayCurrency = "USD" | "THB";
+
+type UsdThbRate = {
+  rate: number;
+  period: string;
+  source: string;
+};
+
+const sortableColumns: Array<{ key: SortKey; label: string }> = [
+  { key: "symbol", label: "Symbol" },
+  { key: "price", label: "Now" },
+  { key: "changePercent", label: "Day" },
+  { key: "rangeChange", label: "1Y Move" },
+  { key: "drawdownPercent", label: "From Top" },
+  { key: "previousTop", label: "Top" }
+];
+
 export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[] }) {
   const seededSymbols = useMemo(() => uniqueSymbols(defaultSymbols.length ? defaultSymbols : fallbackSymbols), [defaultSymbols]);
   const [symbols, setSymbols] = useState<string[]>([]);
   const [rows, setRows] = useState<WatchlistRow[]>([]);
+  const [sort, setSort] = useState<WatchlistSort | null>(null);
   const [symbol, setSymbol] = useState("");
   const [drawdownLimit, setDrawdownLimit] = useState("12");
   const [drawdownRange, setDrawdownRange] = useState<DrawdownRange>("1y");
   const [loading, setLoading] = useState(false);
   const [bootstrapped, setBootstrapped] = useState(false);
+  const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>("USD");
+  const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(null);
+  const [fxLoading, setFxLoading] = useState(false);
+  const [fxError, setFxError] = useState("");
 
   useEffect(() => {
     const stored = window.localStorage.getItem(storageKey);
@@ -56,6 +85,21 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
 
     return { positive, flagged, averageDrawdown, worstDrawdown };
   }, [drawdownLimit, rows]);
+  const sortedRows = useMemo(() => {
+    if (!sort) return rows;
+
+    return [...rows].sort((first, second) => {
+      const firstValue = getSortValue(first, sort.key);
+      const secondValue = getSortValue(second, sort.key);
+      const direction = sort.direction === "asc" ? 1 : -1;
+
+      if (typeof firstValue === "string" && typeof secondValue === "string") {
+        return firstValue.localeCompare(secondValue) * direction;
+      }
+
+      return (Number(firstValue) - Number(secondValue)) * direction;
+    });
+  }, [rows, sort]);
 
   async function fetchMarket(symbolInput: string, topRange = drawdownRange) {
     const url = new URL("/api/market", window.location.origin);
@@ -101,6 +145,42 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
 
   function resetWatchlist() {
     setSymbols(seededSymbols);
+  }
+
+  function changeSort(key: SortKey) {
+    setSort((current) => {
+      if (current?.key === key) {
+        return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+      }
+
+      return { key, direction: key === "symbol" ? "asc" : "desc" };
+    });
+  }
+
+  async function toggleThbDisplay() {
+    if (displayCurrency === "THB") {
+      setDisplayCurrency("USD");
+      setFxError("");
+      return;
+    }
+
+    setFxLoading(true);
+    setFxError("");
+    try {
+      const response = await fetch("/api/exchange-rate/usd-thb");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to load USD/THB exchange rate");
+      setUsdThbRate(payload as UsdThbRate);
+      setDisplayCurrency("THB");
+    } catch (error) {
+      setFxError(error instanceof Error ? error.message : "Unable to load USD/THB exchange rate");
+    } finally {
+      setFxLoading(false);
+    }
+  }
+
+  function formatMoney(value: number, currency = "USD") {
+    return formatDisplayMoney(value, currency, displayCurrency, usdThbRate?.rate);
   }
 
   return (
@@ -167,6 +247,15 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
           <button type="button" onClick={resetWatchlist} className="mt-3 w-full rounded-2xl border border-cyan-signal/25 bg-cyan-signal/10 px-4 py-3 font-bold text-cyan-signal hover:text-white">
             Reset watchlist
           </button>
+          <button type="button" onClick={toggleThbDisplay} className="mt-3 w-full rounded-2xl border border-amber-signal/30 bg-amber-signal/10 px-4 py-3 font-bold text-amber-signal hover:text-white">
+            {fxLoading ? "Loading BOT rate..." : displayCurrency === "THB" ? "Show USD" : "Convert USD to THB"}
+          </button>
+          {usdThbRate && (
+            <p className="mt-3 text-sm text-slate-400">
+              USD/THB {usdThbRate.rate.toFixed(4)} from {usdThbRate.source}, {usdThbRate.period}.
+            </p>
+          )}
+          {fxError && <p className="mt-3 text-sm text-rose-signal">{fxError}</p>}
         </section>
 
         <section className="glass-panel overflow-hidden rounded-3xl">
@@ -178,25 +267,37 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
             <table className="w-full min-w-[900px] border-collapse text-left">
               <thead className="text-xs uppercase tracking-wide text-slate-400">
                 <tr>
-                  <th className="px-6 py-4">Symbol</th>
-                  <th className="px-6 py-4">Now</th>
-                  <th className="px-6 py-4">Day</th>
-                  <th className="px-6 py-4">1Y Move</th>
-                  <th className="px-6 py-4">From Top</th>
-                  <th className="px-6 py-4">Top</th>
+                  {sortableColumns.map((column) => (
+                    <th
+                      key={column.key}
+                      className="px-6 py-4"
+                      aria-sort={sort?.key === column.key ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => changeSort(column.key)}
+                        className="inline-flex min-h-8 items-center gap-2 rounded-full border border-transparent px-2 text-left font-black text-slate-400 transition hover:border-white/10 hover:bg-white/5 hover:text-white"
+                      >
+                        <span>{column.label}</span>
+                        <span className={sort?.key === column.key ? "text-cyan-signal" : "text-slate-600"}>
+                          {sort?.key === column.key ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}
+                        </span>
+                      </button>
+                    </th>
+                  ))}
                   <th className="px-6 py-4"></th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {sortedRows.map((row) => (
                   <tr key={row.requestSymbol} className="border-t border-white/10">
                     <td className="px-6 py-4">
                       <strong className="block">{row.symbol}</strong>
                       <small className="text-slate-400">{row.name}</small>
                     </td>
-                    <td className="px-6 py-4 font-black">{currencyFormat(row.price, row.currency)}</td>
+                    <td className="px-6 py-4 font-black">{formatMoney(row.price, row.currency)}</td>
                     <td className={`px-6 py-4 font-black ${row.changePercent >= 0 ? "text-mint-signal" : "text-rose-signal"}`}>
-                      {currencyFormat(row.change, row.currency)} {percentFormat(row.changePercent)}
+                      {formatMoney(row.change, row.currency)} {percentFormat(row.changePercent)}
                     </td>
                     <td className={`px-6 py-4 font-black ${row.rangeChange >= 0 ? "text-mint-signal" : "text-rose-signal"}`}>
                       {percentFormat(row.rangeChange)}
@@ -204,7 +305,7 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
                     <td className={`px-6 py-4 font-black ${Math.abs(row.drawdownPercent) >= Number(drawdownLimit || 0) ? "text-amber-signal" : "text-slate-300"}`}>
                       {percentFormat(row.drawdownPercent)}
                     </td>
-                    <td className="px-6 py-4">{currencyFormat(row.previousTop, row.currency)}</td>
+                    <td className="px-6 py-4">{formatMoney(row.previousTop, row.currency)}</td>
                     <td className="px-6 py-4">
                       <button onClick={() => removeSymbol(row.requestSymbol)} className="rounded-full border border-white/10 px-3 py-1 text-sm text-slate-400 hover:text-white">
                         Remove
@@ -232,4 +333,17 @@ function Summary({ title, value, tone = "text-white" }: { title: string; value: 
 
 function uniqueSymbols(symbols: string[]) {
   return Array.from(new Set(symbols.map((item) => item.trim().toUpperCase()).filter(Boolean)));
+}
+
+function getSortValue(row: WatchlistRow, key: SortKey) {
+  if (key === "symbol") return row.symbol;
+  return row[key];
+}
+
+function formatDisplayMoney(value: number, sourceCurrency: string, displayCurrency: DisplayCurrency, usdThbRate?: number) {
+  if (displayCurrency === "THB" && sourceCurrency === "USD" && usdThbRate) {
+    return currencyFormat(value * usdThbRate, "THB");
+  }
+
+  return currencyFormat(value, sourceCurrency);
 }

@@ -1,13 +1,23 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { PortfolioSeed } from "@/types/portfolio";
+import type { AllocationRule, PortfolioSeed } from "@/types/portfolio";
 
 const myPortPath = path.join(process.cwd(), "public", "my-port.csv");
+const myAllocationPath = path.join(process.cwd(), "public", "my-allocation.csv");
 
 export async function getMyPortfolioSeed(): Promise<PortfolioSeed[]> {
   try {
     const csv = await readFile(myPortPath, "utf8");
     return parseMyPortfolioCsv(csv);
+  } catch {
+    return [];
+  }
+}
+
+export async function getMyAllocationRules(): Promise<AllocationRule[]> {
+  try {
+    const csv = await readFile(myAllocationPath, "utf8");
+    return parseMyAllocationCsv(csv);
   } catch {
     return [];
   }
@@ -54,6 +64,40 @@ function parseMyPortfolioCsv(csv: string): PortfolioSeed[] {
       symbol,
       ...(hasMarketValueProfit ? { marketValue, profitLossPercent } : {}),
       ...(hasQuantityCost ? { quantity, costBasis, costCurrency: costCurrency || "USD" } : {})
+    };
+  });
+}
+
+function parseMyAllocationCsv(csv: string): AllocationRule[] {
+  const [headerLine, ...rows] = csv
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!headerLine) return [];
+
+  const headers = splitCsvLine(headerLine).map(normalizeHeader);
+  const categoryIndex = headers.indexOf("category");
+  const symbolIndex = headers.indexOf("symbol");
+  const cashValueIndex = headers.indexOf("cashvalue");
+  const cashCurrencyIndex = headers.indexOf("cashcurrency");
+
+  if (categoryIndex < 0 || symbolIndex < 0) return [];
+
+  return rows.flatMap((row) => {
+    const columns = splitCsvLine(row);
+    const category = columns[categoryIndex]?.trim();
+    const symbol = columns[symbolIndex]?.trim().toUpperCase();
+    const cashValue = readNumber(columns, cashValueIndex);
+    const cashCurrency = columns[cashCurrencyIndex]?.trim().toUpperCase();
+
+    if (!category || !symbol) return [];
+
+    return {
+      category,
+      symbol,
+      ...(Number.isFinite(cashValue) ? { cashValue } : {}),
+      ...(cashCurrency ? { cashCurrency } : {})
     };
   });
 }
