@@ -14,12 +14,17 @@ type EventLog = {
   body: string;
 };
 
+type WatchlistWriteResponse = {
+  symbol: string;
+  symbols: string[];
+};
+
 export function MarketDashboard() {
   const [symbol, setSymbol] = useState("AAPL");
   const [range, setRange] = useState("6mo");
   const [drawdownRange, setDrawdownRange] = useState<DrawdownRange>("1y");
   const [data, setData] = useState<MarketData | null>(null);
-  const [chartType, setChartType] = useState<"candles" | "area">("candles");
+  const [chartType, setChartType] = useState<"candles" | "area">("area");
   const [events, setEvents] = useState<EventLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [priceAlert, setPriceAlert] = useState("");
@@ -28,6 +33,7 @@ export function MarketDashboard() {
   const [armedDrawdown, setArmedDrawdown] = useState<{ symbol: string; value: number; triggered: boolean } | null>(null);
   const [notifyEnabled, setNotifyEnabled] = useState(false);
   const [watchlist, setWatchlist] = useState(quickSymbols);
+  const [watchlistSaving, setWatchlistSaving] = useState(false);
 
   const alertStatus = useMemo(() => {
     if (armedPrice?.triggered || armedDrawdown?.triggered) return "Triggered";
@@ -73,6 +79,17 @@ export function MarketDashboard() {
     }
   }
 
+  async function loadSavedWatchlist() {
+    try {
+      const response = await fetch("/api/watchlist/my-watchlist");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to load my-watchlist.csv");
+      setWatchlist((payload as { symbols: string[] }).symbols);
+    } catch (error) {
+      addEvent("Watchlist load failed", error instanceof Error ? error.message : "Using default symbols.");
+    }
+  }
+
   function evaluateAlerts(market: MarketData) {
     if (armedPrice && armedPrice.symbol === market.symbol && !armedPrice.triggered && market.price <= armedPrice.value) {
       setArmedPrice({ ...armedPrice, triggered: true });
@@ -98,6 +115,7 @@ export function MarketDashboard() {
 
   useEffect(() => {
     loadMarket("AAPL", "6mo", "1y");
+    loadSavedWatchlist();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -141,6 +159,33 @@ export function MarketDashboard() {
     if (Number.isFinite(drawdownValue) && drawdownValue > 0) {
       setArmedDrawdown({ symbol: data.symbol, value: drawdownValue, triggered: false });
       addEvent("Drawdown alert armed", `${data.symbol} will trigger at ${drawdownValue}% below the ${data.drawdownLabel} top.`);
+    }
+  }
+
+  async function saveCurrentToWatchlist() {
+    if (!data) return;
+    setWatchlistSaving(true);
+
+    try {
+      const response = await fetch("/api/watchlist/my-watchlist", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          symbol: data.symbol
+        })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to update my-watchlist.csv");
+
+      const { symbols } = payload as WatchlistWriteResponse;
+      setWatchlist(symbols);
+      addEvent("Watchlist saved", `${data.symbol} saved to my-watchlist.csv.`);
+    } catch (error) {
+      addEvent("Watchlist save failed", error instanceof Error ? error.message : "Unable to update my-watchlist.csv.");
+    } finally {
+      setWatchlistSaving(false);
     }
   }
 
@@ -294,11 +339,12 @@ export function MarketDashboard() {
                 <h2 className="text-xl font-black">Markets</h2>
               </div>
               <button
-                onClick={() => data && !watchlist.includes(data.symbol) && setWatchlist([data.symbol, ...watchlist])}
+                onClick={saveCurrentToWatchlist}
+                disabled={!data || watchlistSaving}
                 className="grid h-10 w-10 place-items-center rounded-2xl border border-white/10 text-2xl text-cyan-signal"
                 title="Add current symbol"
               >
-                +
+                {watchlistSaving ? "..." : "+"}
               </button>
             </div>
             <div className="grid max-h-72 gap-2 overflow-auto">

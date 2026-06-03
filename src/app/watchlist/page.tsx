@@ -1,9 +1,8 @@
 import { WatchlistDashboard } from "@/components/watchlist-dashboard";
-import { getMyPortfolioSeed } from "@/lib/my-port";
+import { getMyWatchlistSymbols } from "@/lib/my-watchlist";
 
 export default async function WatchlistPage() {
-  const defaultPortfolio = await getMyPortfolioSeed();
-  const defaultSymbols = defaultPortfolio.map((holding) => holding.symbol);
+  const defaultSymbols = await getMyWatchlistSymbols();
 
   return <WatchlistDashboard defaultSymbols={defaultSymbols} />;
 }

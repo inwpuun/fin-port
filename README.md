@@ -46,6 +46,8 @@ Browser notifications require enabling the notification toggle and approving the
 
 `public/my-port.csv` supports either `holding value` + `% profit`, or `quantity` + `cost basis` + `cost currency` for positions such as bitcoin bought in THB.
 
+`public/my-watchlist.csv` stores one `symbol` per row for `/watchlist` and the market dashboard watchlist.
+
 `public/my-allocation.csv` maps portfolio symbols into allocation categories and can include a `Cash` row with `cash value` + `cash currency`.
 
 Portfolio, watchlist, and allocation pages can display USD values in THB using the Bank of Thailand USD/THB reference rate API. Set `BOT_API_KEY` in your environment before running the app.
@@ -58,3 +60,15 @@ Build and run on Linux or macOS with Docker:
 docker build -t fin-port .
 docker run --rm -p 3000:3000 fin-port
 ```
+
+Run with Docker Compose when you want portfolio/watchlist CSV edits to persist back to this project:
+
+```bash
+LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) docker compose up -d --build
+```
+
+The Compose service bind-mounts `./public` to `/app/public`, so updates to `public/my-port.csv` and `public/my-watchlist.csv` from the app are written to the same files in this repo.
+The mount is SELinux-labeled for Fedora/RHEL-style hosts, which avoids `EACCES` errors when the container scans `/app/public`.
+The service uses Docker's `unless-stopped` restart policy, so it starts again after reboot as long as Docker itself starts on boot.
+
+This machine also has a user systemd unit at `~/.config/systemd/user/fin-port.service` enabled to run `docker compose up -d --no-build` automatically.

@@ -1,11 +1,11 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { drawdownRanges, fallbackMarketData } from "@/lib/market";
+import { drawdownRanges, fallbackMarketData, normalizeSymbol } from "@/lib/market";
 import { currencyFormat, percentFormat } from "@/lib/format";
 import type { DrawdownRange, MarketData } from "@/types/market";
+import { SymbolChartModal } from "./symbol-chart-modal";
 
-const storageKey = "fin-port-watchlist-v1";
 const fallbackSymbols = ["AAPL", "MSFT", "NVDA", "VOO", "BTC-USD", "GC=F"];
 
 type WatchlistRow = MarketData & {
@@ -20,11 +20,17 @@ type WatchlistSort = {
 };
 
 type DisplayCurrency = "USD" | "THB";
+type ChartType = "candles" | "area";
 
 type UsdThbRate = {
   rate: number;
   period: string;
   source: string;
+};
+
+type WatchlistWriteResponse = {
+  symbol: string;
+  symbols: string[];
 };
 
 const sortableColumns: Array<{ key: SortKey; label: string }> = [
@@ -38,13 +44,20 @@ const sortableColumns: Array<{ key: SortKey; label: string }> = [
 
 export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[] }) {
   const seededSymbols = useMemo(() => uniqueSymbols(defaultSymbols.length ? defaultSymbols : fallbackSymbols), [defaultSymbols]);
-  const [symbols, setSymbols] = useState<string[]>([]);
+  const [watchlistSeed, setWatchlistSeed] = useState(seededSymbols);
+  const [symbols, setSymbols] = useState<string[]>(seededSymbols);
   const [rows, setRows] = useState<WatchlistRow[]>([]);
   const [sort, setSort] = useState<WatchlistSort | null>(null);
   const [symbol, setSymbol] = useState("");
   const [drawdownLimit, setDrawdownLimit] = useState("12");
   const [drawdownRange, setDrawdownRange] = useState<DrawdownRange>("1y");
   const [loading, setLoading] = useState(false);
+  const [savingSymbol, setSavingSymbol] = useState(false);
+  const [removingSymbol, setRemovingSymbol] = useState("");
+  const [watchlistError, setWatchlistError] = useState("");
+  const [chartOpen, setChartOpen] = useState(false);
+  const [chartMarket, setChartMarket] = useState<MarketData | null>(null);
+  const [chartType, setChartType] = useState<ChartType>("area");
   const [bootstrapped, setBootstrapped] = useState(false);
   const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>("USD");
   const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(null);
@@ -52,24 +65,13 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
   const [fxError, setFxError] = useState("");
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(storageKey);
-    if (stored) {
-      try {
-        setSymbols(uniqueSymbols(JSON.parse(stored) as string[]));
-        setBootstrapped(true);
-        return;
-      } catch {
-        window.localStorage.removeItem(storageKey);
-      }
-    }
+    setWatchlistSeed(seededSymbols);
     setSymbols(seededSymbols);
     setBootstrapped(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [seededSymbols]);
 
   useEffect(() => {
     if (!bootstrapped) return;
-    window.localStorage.setItem(storageKey, JSON.stringify(symbols));
     refreshRows(symbols, drawdownRange);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbols, drawdownRange, bootstrapped]);
@@ -131,20 +133,77 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
     }
   }
 
-  function addSymbol(event: FormEvent<HTMLFormElement>) {
+  async function addSymbol(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const cleanSymbol = symbol.trim().toUpperCase();
-    if (!cleanSymbol) return;
-    setSymbols((current) => uniqueSymbols([cleanSymbol, ...current]));
-    setSymbol("");
+    if (!cleanSymbol) {
+      setWatchlistError("Symbol is required.");
+      return;
+    }
+
+    setSavingSymbol(true);
+    setWatchlistError("");
+
+    try {
+      const response = await fetch("/api/watchlist/my-watchlist", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          symbol: cleanSymbol
+        })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to update my-watchlist.csv");
+
+      const { symbols: nextSymbols } = payload as WatchlistWriteResponse;
+      setWatchlistSeed(nextSymbols);
+      setSymbols(nextSymbols);
+      setSymbol("");
+    } catch (error) {
+      setWatchlistError(error instanceof Error ? error.message : "Unable to update my-watchlist.csv");
+    } finally {
+      setSavingSymbol(false);
+    }
   }
 
-  function removeSymbol(symbolToRemove: string) {
-    setSymbols((current) => current.filter((item) => item !== symbolToRemove));
+  async function removeSymbol(symbolToRemove: string) {
+    setRemovingSymbol(symbolToRemove);
+    setWatchlistError("");
+
+    try {
+      const response = await fetch("/api/watchlist/my-watchlist", {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          symbol: symbolToRemove
+        })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to update my-watchlist.csv");
+
+      const { symbols: nextSymbols } = payload as WatchlistWriteResponse;
+      setWatchlistSeed(nextSymbols);
+      setSymbols(nextSymbols);
+      setRows((current) => current.filter((row) => normalizeSymbol(row.requestSymbol) !== normalizeSymbol(symbolToRemove)));
+    } catch (error) {
+      setWatchlistError(error instanceof Error ? error.message : "Unable to update my-watchlist.csv");
+    } finally {
+      setRemovingSymbol("");
+    }
   }
 
   function resetWatchlist() {
-    setSymbols(seededSymbols);
+    setSymbols(watchlistSeed);
+  }
+
+  function openSymbolChart(row: WatchlistRow) {
+    setChartMarket(row);
+    setChartType("area");
+    setChartOpen(true);
   }
 
   function changeSort(key: SortKey) {
@@ -239,8 +298,11 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
               <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Symbol</span>
               <input id="watchlist-symbol" name="watchlistSymbol" className="bg-transparent text-lg outline-none" value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder="AAPL" />
             </label>
-            <button className="min-h-12 rounded-2xl bg-gradient-to-r from-white to-[#8af5d6] font-black text-[#05110e]">Add to watchlist</button>
+            <button disabled={savingSymbol} className="min-h-12 rounded-2xl bg-gradient-to-r from-white to-[#8af5d6] font-black text-[#05110e] disabled:cursor-not-allowed disabled:opacity-60">
+              {savingSymbol ? "Saving..." : "Add to watchlist"}
+            </button>
           </form>
+          {watchlistError && <p className="mt-3 text-sm text-rose-signal">{watchlistError}</p>}
           <button type="button" onClick={() => refreshRows(symbols, drawdownRange)} className="mt-3 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 font-bold text-slate-300 hover:text-white">
             {loading ? "Refreshing..." : "Refresh prices"}
           </button>
@@ -292,7 +354,9 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
                 {sortedRows.map((row) => (
                   <tr key={row.requestSymbol} className="border-t border-white/10">
                     <td className="px-6 py-4">
-                      <strong className="block">{row.symbol}</strong>
+                      <button type="button" onClick={() => openSymbolChart(row)} className="block text-left font-black text-white underline-offset-4 hover:text-cyan-signal hover:underline">
+                        {row.symbol}
+                      </button>
                       <small className="text-slate-400">{row.name}</small>
                     </td>
                     <td className="px-6 py-4 font-black">{formatMoney(row.price, row.currency)}</td>
@@ -307,8 +371,12 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
                     </td>
                     <td className="px-6 py-4">{formatMoney(row.previousTop, row.currency)}</td>
                     <td className="px-6 py-4">
-                      <button onClick={() => removeSymbol(row.requestSymbol)} className="rounded-full border border-white/10 px-3 py-1 text-sm text-slate-400 hover:text-white">
-                        Remove
+                      <button
+                        onClick={() => removeSymbol(row.requestSymbol)}
+                        disabled={isPendingSymbol(removingSymbol, row.requestSymbol)}
+                        className="rounded-full border border-white/10 px-3 py-1 text-sm text-slate-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isPendingSymbol(removingSymbol, row.requestSymbol) ? "Removing..." : "Remove"}
                       </button>
                     </td>
                   </tr>
@@ -318,6 +386,14 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
           </div>
         </section>
       </section>
+      {chartOpen && (
+        <SymbolChartModal
+          chartType={chartType}
+          data={chartMarket}
+          onChartTypeChange={setChartType}
+          onClose={() => setChartOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -332,7 +408,11 @@ function Summary({ title, value, tone = "text-white" }: { title: string; value: 
 }
 
 function uniqueSymbols(symbols: string[]) {
-  return Array.from(new Set(symbols.map((item) => item.trim().toUpperCase()).filter(Boolean)));
+  return Array.from(new Set(symbols.map((item) => normalizeSymbol(item)).filter(Boolean)));
+}
+
+function isPendingSymbol(pendingSymbol: string, rowSymbol: string) {
+  return Boolean(pendingSymbol) && normalizeSymbol(pendingSymbol) === normalizeSymbol(rowSymbol);
 }
 
 function getSortValue(row: WatchlistRow, key: SortKey) {

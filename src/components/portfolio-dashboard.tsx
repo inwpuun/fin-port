@@ -1,11 +1,12 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { createHolding, createHoldingFromPortfolioSeed, enrichHolding } from "@/lib/portfolio";
-import { drawdownRanges, fallbackMarketData } from "@/lib/market";
+import { createHoldingFromPortfolioSeed, enrichHolding } from "@/lib/portfolio";
+import { drawdownRanges, fallbackMarketData, normalizeSymbol } from "@/lib/market";
 import { currencyFormat, percentFormat } from "@/lib/format";
 import type { Holding, HoldingWithMarket, PortfolioSeed } from "@/types/portfolio";
 import type { DrawdownRange, MarketData } from "@/types/market";
+import { SymbolChartModal } from "./symbol-chart-modal";
 
 const storageKey = "fin-port-holdings-v3";
 
@@ -17,11 +18,23 @@ type PortfolioSort = {
 };
 
 type DisplayCurrency = "USD" | "THB";
+type ChartType = "candles" | "area";
 
 type UsdThbRate = {
   rate: number;
   period: string;
   source: string;
+};
+
+type PortfolioWriteResponse = {
+  seed: PortfolioSeed;
+  portfolio: PortfolioSeed[];
+  market: MarketData;
+};
+
+type PortfolioDeleteResponse = {
+  stock: string;
+  portfolio: PortfolioSeed[];
 };
 
 const sortableColumns: Array<{ key: SortKey; label: string }> = [
@@ -35,15 +48,24 @@ const sortableColumns: Array<{ key: SortKey; label: string }> = [
 ];
 
 export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: PortfolioSeed[] }) {
+  const [portfolioSeed, setPortfolioSeed] = useState(defaultPortfolio);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [rows, setRows] = useState<HoldingWithMarket[]>([]);
   const [sort, setSort] = useState<PortfolioSort | null>(null);
   const [symbol, setSymbol] = useState("");
-  const [quantity, setQuantity] = useState("");
-  const [buyPrice, setBuyPrice] = useState("");
+  const [holdingValue, setHoldingValue] = useState("");
+  const [profitPercent, setProfitPercent] = useState("");
   const [drawdownLimit, setDrawdownLimit] = useState("12");
   const [drawdownRange, setDrawdownRange] = useState<DrawdownRange>("1y");
   const [loading, setLoading] = useState(false);
+  const [addSaving, setAddSaving] = useState(false);
+  const [addError, setAddError] = useState("");
+  const [removingSymbol, setRemovingSymbol] = useState("");
+  const [chartOpen, setChartOpen] = useState(false);
+  const [chartMarket, setChartMarket] = useState<MarketData | null>(null);
+  const [chartLoading, setChartLoading] = useState(false);
+  const [chartError, setChartError] = useState("");
+  const [chartType, setChartType] = useState<ChartType>("area");
   const [bootstrapped, setBootstrapped] = useState(false);
   const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>("USD");
   const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(null);
@@ -63,7 +85,7 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
       }
     }
 
-    materializeDefaultPortfolio(defaultPortfolio, drawdownRange);
+    materializeDefaultPortfolio(portfolioSeed, drawdownRange);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -161,19 +183,98 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
     }
   }
 
-  function addHolding(event: FormEvent<HTMLFormElement>) {
+  async function addHolding(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const qty = Number(quantity);
-    const price = Number(buyPrice);
-    if (!symbol.trim() || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price <= 0) return;
-    setHoldings((current) => [createHolding(symbol, qty, price), ...current]);
-    setSymbol("");
-    setQuantity("");
-    setBuyPrice("");
+    const value = Number(holdingValue);
+    const profit = Number(profitPercent);
+
+    if (!symbol.trim() || !Number.isFinite(value) || value <= 0 || !Number.isFinite(profit) || profit <= -100) {
+      setAddError("Enter a stock, holding value greater than 0, and % profit greater than -100.");
+      return;
+    }
+
+    setAddSaving(true);
+    setAddError("");
+
+    try {
+      const response = await fetch("/api/portfolio/my-port", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          stock: symbol,
+          holdingValue: value,
+          profitPercent: profit
+        })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to update my-port.csv");
+
+      const { seed, portfolio, market } = payload as PortfolioWriteResponse;
+      const holding = createHoldingFromPortfolioSeed(seed, market, seed.costBasis);
+      const row = enrichHolding(holding, market);
+
+      skipNextRefresh.current = true;
+      setPortfolioSeed(portfolio);
+      setHoldings((current) => upsertBySymbol(current, holding));
+      setRows((current) => upsertBySymbol(current, row));
+      setSymbol("");
+      setHoldingValue("");
+      setProfitPercent("");
+    } catch (error) {
+      setAddError(error instanceof Error ? error.message : "Unable to update my-port.csv");
+    } finally {
+      setAddSaving(false);
+    }
   }
 
-  function removeHolding(id: string) {
-    setHoldings((current) => current.filter((holding) => holding.id !== id));
+  async function removeHolding(symbolToRemove: string) {
+    setRemovingSymbol(symbolToRemove);
+    setAddError("");
+
+    try {
+      const response = await fetch("/api/portfolio/my-port", {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          stock: symbolToRemove
+        })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to update my-port.csv");
+
+      const { portfolio } = payload as PortfolioDeleteResponse;
+      const removedKey = normalizeSymbol(symbolToRemove);
+
+      skipNextRefresh.current = true;
+      setPortfolioSeed(portfolio);
+      setHoldings((current) => current.filter((holding) => normalizeSymbol(holding.symbol) !== removedKey));
+      setRows((current) => current.filter((row) => normalizeSymbol(row.symbol) !== removedKey));
+    } catch (error) {
+      setAddError(error instanceof Error ? error.message : "Unable to update my-port.csv");
+    } finally {
+      setRemovingSymbol("");
+    }
+  }
+
+  async function openSymbolChart(symbolInput: string) {
+    setChartOpen(true);
+    setChartMarket(null);
+    setChartError("");
+    setChartLoading(true);
+    setChartType("area");
+
+    try {
+      const market = await fetchMarket(symbolInput, drawdownRange);
+      setChartMarket(market);
+    } catch (error) {
+      setChartError(error instanceof Error ? error.message : "Unable to load chart");
+    } finally {
+      setChartLoading(false);
+    }
   }
 
   function changeSort(key: SortKey) {
@@ -283,19 +384,22 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
               <input id="holding-symbol" name="holdingSymbol" className="bg-transparent text-lg outline-none" value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder="AAPL" />
             </label>
             <label className="field-shell grid gap-1 rounded-2xl px-4 py-3">
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Quantity</span>
-              <input id="holding-quantity" name="holdingQuantity" className="bg-transparent text-lg outline-none" type="number" min="0" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} placeholder="10" />
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Holding value</span>
+              <input id="holding-value" name="holdingValue" className="bg-transparent text-lg outline-none" type="number" min="0" step="0.01" value={holdingValue} onChange={(event) => setHoldingValue(event.target.value)} placeholder="1000.00" />
             </label>
             <label className="field-shell grid gap-1 rounded-2xl px-4 py-3">
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Buy price</span>
-              <input id="holding-buy-price" name="holdingBuyPrice" className="bg-transparent text-lg outline-none" type="number" min="0" step="0.01" value={buyPrice} onChange={(event) => setBuyPrice(event.target.value)} placeholder="185.00" />
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-400">% profit</span>
+              <input id="holding-profit-percent" name="holdingProfitPercent" className="bg-transparent text-lg outline-none" type="number" min="-99.99" step="0.01" value={profitPercent} onChange={(event) => setProfitPercent(event.target.value)} placeholder="12.5" />
             </label>
-            <button className="min-h-12 rounded-2xl bg-gradient-to-r from-white to-[#8af5d6] font-black text-[#05110e]">Add holding</button>
+            <button disabled={addSaving} className="min-h-12 rounded-2xl bg-gradient-to-r from-white to-[#8af5d6] font-black text-[#05110e] disabled:cursor-not-allowed disabled:opacity-60">
+              {addSaving ? "Saving..." : "Add holding"}
+            </button>
           </form>
+          {addError && <p className="mt-3 text-sm text-rose-signal">{addError}</p>}
           <button type="button" onClick={() => refreshRows(holdings, drawdownRange)} className="mt-3 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 font-bold text-slate-300 hover:text-white">
             {loading ? "Refreshing..." : "Refresh prices"}
           </button>
-          <button type="button" onClick={() => materializeDefaultPortfolio(defaultPortfolio, drawdownRange)} className="mt-3 w-full rounded-2xl border border-cyan-signal/25 bg-cyan-signal/10 px-4 py-3 font-bold text-cyan-signal hover:text-white">
+          <button type="button" onClick={() => materializeDefaultPortfolio(portfolioSeed, drawdownRange)} className="mt-3 w-full rounded-2xl border border-cyan-signal/25 bg-cyan-signal/10 px-4 py-3 font-bold text-cyan-signal hover:text-white">
             Reset to my-port.csv
           </button>
           <button type="button" onClick={toggleThbDisplay} className="mt-3 w-full rounded-2xl border border-amber-signal/30 bg-amber-signal/10 px-4 py-3 font-bold text-amber-signal hover:text-white">
@@ -343,7 +447,9 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
                 {sortedRows.map((row) => (
                   <tr key={row.id} className="border-t border-white/10">
                     <td className="px-6 py-4">
-                      <strong className="block">{row.symbol}</strong>
+                      <button type="button" onClick={() => openSymbolChart(row.symbol)} className="block text-left font-black text-white underline-offset-4 hover:text-cyan-signal hover:underline">
+                        {row.symbol}
+                      </button>
                       <small className="text-slate-400">{row.name}</small>
                     </td>
                     <td className="px-6 py-4">{quantityFormat(row.quantity)}</td>
@@ -357,8 +463,12 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
                       {percentFormat(row.drawdownPercent)}
                     </td>
                     <td className="px-6 py-4">
-                      <button onClick={() => removeHolding(row.id)} className="rounded-full border border-white/10 px-3 py-1 text-sm text-slate-400 hover:text-white">
-                        Remove
+                      <button
+                        onClick={() => removeHolding(row.symbol)}
+                        disabled={isPendingSymbol(removingSymbol, row.symbol)}
+                        className="rounded-full border border-white/10 px-3 py-1 text-sm text-slate-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isPendingSymbol(removingSymbol, row.symbol) ? "Removing..." : "Remove"}
                       </button>
                     </td>
                   </tr>
@@ -368,6 +478,16 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
           </div>
         </section>
       </section>
+      {chartOpen && (
+        <SymbolChartModal
+          chartType={chartType}
+          data={chartMarket}
+          error={chartError}
+          loading={chartLoading}
+          onChartTypeChange={setChartType}
+          onClose={() => setChartOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -391,6 +511,15 @@ function quantityFormat(value: number) {
 function getSortValue(row: HoldingWithMarket, key: SortKey) {
   if (key === "symbol") return row.symbol;
   return row[key];
+}
+
+function isPendingSymbol(pendingSymbol: string, rowSymbol: string) {
+  return Boolean(pendingSymbol) && normalizeSymbol(pendingSymbol) === normalizeSymbol(rowSymbol);
+}
+
+function upsertBySymbol<T extends { symbol: string }>(items: T[], next: T) {
+  const nextKey = normalizeSymbol(next.symbol);
+  return [next, ...items.filter((item) => normalizeSymbol(item.symbol) !== nextKey)];
 }
 
 function formatDisplayMoney(value: number, sourceCurrency: string, displayCurrency: DisplayCurrency, usdThbRate?: number) {

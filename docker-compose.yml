@@ -1,0 +1,19 @@
+services:
+  fin-port:
+    build:
+      context: .
+    image: fin-port:local
+    restart: unless-stopped
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      BOT_API_KEY: "${BOT_API_KEY:-}"
+      NODE_ENV: production
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    volumes:
+      - type: bind
+        source: ./public
+        target: /app/public
+        bind:
+          selinux: z
