@@ -3,6 +3,5 @@
 node_modules
 my-allocation.csv
 my-port.csv
-my-watchlist.csv
 cash-book
 .env
