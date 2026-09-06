@@ -1,20 +1,23 @@
 import type { Holding, HoldingWithMarket } from "@/types/portfolio";
 import type { MarketData } from "@/types/market";
 
-export function createHolding(symbol: string, quantity: number, buyPrice: number): Holding {
-  return {
-    id: crypto.randomUUID(),
-    symbol: symbol.trim().toUpperCase(),
-    quantity,
-    buyPrice
-  };
-}
-
-export function enrichHolding(holding: Holding, market: MarketData): HoldingWithMarket {
+/**
+ * Combines a stored position with a live quote.
+ *
+ * `fxRate` converts the holding's cost currency into the quote currency; pass
+ * 1 when they already match. Cost basis comes straight from the stored total
+ * rather than being recomputed from a unit price, so fractional-share rounding
+ * never drifts into the P/L.
+ */
+export function enrichHolding(
+  holding: Holding,
+  market: MarketData,
+  fxRate = 1
+): HoldingWithMarket {
   const marketValue = holding.quantity * market.price;
-  const costBasis = holding.quantity * holding.buyPrice;
-  const profitLoss = marketValue - costBasis;
-  const profitLossPercent = costBasis ? (profitLoss / costBasis) * 100 : 0;
+  const costBasisConverted = holding.costBasis * fxRate;
+  const profitLoss = marketValue - costBasisConverted;
+  const profitLossPercent = costBasisConverted ? (profitLoss / costBasisConverted) * 100 : 0;
 
   return {
     ...holding,
@@ -22,7 +25,7 @@ export function enrichHolding(holding: Holding, market: MarketData): HoldingWith
     name: market.name,
     currentPrice: market.price,
     marketValue,
-    costBasis,
+    costBasisConverted,
     profitLoss,
     profitLossPercent,
     previousTop: market.previousTop,

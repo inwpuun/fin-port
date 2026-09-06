@@ -9,16 +9,23 @@
     "dev:debug": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint . --max-warnings=0"
+    "lint": "eslint . --max-warnings=0",
+    "db:seed": "tsx scripts/import.ts seed",
+    "db:cash-book": "tsx scripts/import.ts cash-book",
+    "db:import": "tsx scripts/import.ts all",
+    "typecheck": "tsc --noEmit",
+    "db:verify": "tsx scripts/verify-parse.ts"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.115.0",
     "lightweight-charts": "5.2.0",
     "next": "16.2.6",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.3.0",
@@ -28,6 +35,7 @@
     "eslint": "latest",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "4.3.0",
+    "tsx": "^4.23.13",
     "typescript": "latest"
   }
 }

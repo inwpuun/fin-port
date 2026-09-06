@@ -24,6 +24,9 @@ type YahooChartResult = {
 const aliases = new Map<string, string>([
   ["GOLD", "GC=F"],
   ["XAUUSD", "GC=F"],
+  // The holdings sheet writes class-B shares with a dot; Yahoo wants a dash.
+  ["BRK.B", "BRK-B"],
+  ["BRK.A", "BRK-A"],
   ["BTC", "BTC-USD"],
   ["BITCOIN", "BTC-USD"],
   ["SP500", "^GSPC"],

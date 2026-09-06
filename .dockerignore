@@ -6,3 +6,10 @@ Dockerfile
 .git
 .gitignore
 README.md
+
+# never bake credentials or financial data into an image layer
+.env
+.env.*
+!.env.example
+data
+.vercel

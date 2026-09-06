@@ -1,2 +1,20 @@
-.next
+# dependencies
 node_modules
+
+# next.js
+.next
+.vercel
+
+# env — never commit real keys
+.env
+.env.*
+!.env.example
+
+# private financial data (seed CSVs live in Supabase after import)
+/data
+
+# os
+.DS_Store
+
+# typescript incremental build cache
+*.tsbuildinfo

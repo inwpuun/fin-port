@@ -1,12 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState, useTransition } from "react";
 import { drawdownRanges, fallbackMarketData } from "@/lib/market";
 import { currencyFormat, percentFormat, plainPrice } from "@/lib/format";
+import { addWatchlistAction, removeWatchlistAction } from "@/app/watchlist-actions";
 import type { DrawdownRange, MarketData } from "@/types/market";
 import { MarketChart } from "./market-chart";
-
-const quickSymbols = ["AAPL", "MSFT", "GC=F", "BTC-USD", "^GSPC", "^IXIC"];
 
 type EventLog = {
   id: string;
@@ -14,8 +13,8 @@ type EventLog = {
   body: string;
 };
 
-export function MarketDashboard() {
-  const [symbol, setSymbol] = useState("AAPL");
+export function MarketDashboard({ initialWatchlist }: { initialWatchlist: string[] }) {
+  const [symbol, setSymbol] = useState(initialWatchlist[0] ?? "AAPL");
   const [range, setRange] = useState("6mo");
   const [drawdownRange, setDrawdownRange] = useState<DrawdownRange>("1y");
   const [data, setData] = useState<MarketData | null>(null);
@@ -27,7 +26,8 @@ export function MarketDashboard() {
   const [armedPrice, setArmedPrice] = useState<{ symbol: string; value: number; triggered: boolean } | null>(null);
   const [armedDrawdown, setArmedDrawdown] = useState<{ symbol: string; value: number; triggered: boolean } | null>(null);
   const [notifyEnabled, setNotifyEnabled] = useState(false);
-  const [watchlist, setWatchlist] = useState(quickSymbols);
+  const [watchlist, setWatchlist] = useState(initialWatchlist);
+  const [savingWatchlist, startWatchlistTransition] = useTransition();
 
   const alertStatus = useMemo(() => {
     if (armedPrice?.triggered || armedDrawdown?.triggered) return "Triggered";
@@ -73,6 +73,34 @@ export function MarketDashboard() {
     }
   }
 
+  /** Watchlist lives in Postgres; keep the local list optimistic but persist. */
+  function addToWatchlist(next: string) {
+    const clean = next.trim().toUpperCase();
+    if (!clean || watchlist.includes(clean)) return;
+    setWatchlist((current) => [clean, ...current]);
+    startWatchlistTransition(async () => {
+      try {
+        await addWatchlistAction(clean);
+      } catch (error) {
+        setWatchlist((current) => current.filter((item) => item !== clean));
+        addEvent("Watchlist not saved", error instanceof Error ? error.message : "Unknown error");
+      }
+    });
+  }
+
+  function removeFromWatchlist(target: string) {
+    const previous = watchlist;
+    setWatchlist((current) => current.filter((item) => item !== target));
+    startWatchlistTransition(async () => {
+      try {
+        await removeWatchlistAction(target);
+      } catch (error) {
+        setWatchlist(previous);
+        addEvent("Watchlist not saved", error instanceof Error ? error.message : "Unknown error");
+      }
+    });
+  }
+
   function evaluateAlerts(market: MarketData) {
     if (armedPrice && armedPrice.symbol === market.symbol && !armedPrice.triggered && market.price <= armedPrice.value) {
       setArmedPrice({ ...armedPrice, triggered: true });
@@ -97,7 +125,7 @@ export function MarketDashboard() {
   }
 
   useEffect(() => {
-    loadMarket("AAPL", "6mo", "1y");
+    loadMarket(initialWatchlist[0] ?? "AAPL", "6mo", "1y");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -186,7 +214,7 @@ export function MarketDashboard() {
           </button>
         </form>
         <div className="mt-3 flex flex-wrap gap-2">
-          {quickSymbols.map((item) => (
+          {watchlist.slice(0, 8).map((item) => (
             <button
               key={item}
               onClick={() => loadMarket(item, range, drawdownRange)}
@@ -294,22 +322,32 @@ export function MarketDashboard() {
                 <h2 className="text-xl font-black">Markets</h2>
               </div>
               <button
-                onClick={() => data && !watchlist.includes(data.symbol) && setWatchlist([data.symbol, ...watchlist])}
-                className="grid h-10 w-10 place-items-center rounded-2xl border border-white/10 text-2xl text-cyan-signal"
-                title="Add current symbol"
+                onClick={() => data && addToWatchlist(data.symbol)}
+                disabled={savingWatchlist}
+                className="grid h-10 w-10 place-items-center rounded-2xl border border-white/10 text-2xl text-cyan-signal disabled:opacity-50"
+                title="Add current symbol to the saved watchlist"
               >
                 +
               </button>
             </div>
             <div className="grid max-h-72 gap-2 overflow-auto">
               {watchlist.map((item) => (
-                <button key={item} onClick={() => loadMarket(item, range, drawdownRange)} className="flex min-h-14 items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left">
-                  <span>
+                <div key={item} className="flex min-h-14 items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                  <button onClick={() => loadMarket(item, range, drawdownRange)} className="flex-1 text-left">
                     <strong className="block">{item}</strong>
                     <small className="text-slate-400">{item === data?.symbol ? "active" : "watch"}</small>
-                  </span>
-                  <em className="not-italic text-mint-signal">{item === data?.symbol ? "●" : "↗"}</em>
-                </button>
+                  </button>
+                  <em className="not-italic text-mint-signal">{item === data?.symbol ? "\u25cf" : "\u2197"}</em>
+                  <button
+                    onClick={() => removeFromWatchlist(item)}
+                    disabled={savingWatchlist}
+                    className="text-slate-500 transition hover:text-rose-signal disabled:opacity-50"
+                    title={`Remove ${item}`}
+                    aria-label={`Remove ${item} from watchlist`}
+                  >
+                    {"\u00d7"}
+                  </button>
+                </div>
               ))}
             </div>
           </section>
