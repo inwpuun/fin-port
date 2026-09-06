@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isAuthorized, unauthorized } from "@/lib/auth";
 import { fetchMarketData } from "@/lib/market";
 import { createPortfolioSeedFromHoldingValue, deleteMyPortfolioSeed, upsertMyPortfolioSeed } from "@/lib/my-port";
 import type { MarketData } from "@/types/market";
@@ -7,6 +8,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
+  // proxy.ts deliberately lets /api/* through so the CLI can use a bearer
+  // token, so every writing route checks for itself.
+  if (!(await isAuthorized(request))) return unauthorized();
+
   let body: unknown;
 
   try {
@@ -61,11 +66,13 @@ export async function POST(request: NextRequest) {
       }
     );
   } catch (error) {
-    return errorResponse(error instanceof Error ? error.message : "Unable to update my-port.csv", 500);
+    return errorResponse(error instanceof Error ? error.message : "Unable to update the portfolio", 500);
   }
 }
 
 export async function DELETE(request: NextRequest) {
+  if (!(await isAuthorized(request))) return unauthorized();
+
   const body = await readOptionalJson(request);
   const stock = readStringField(body, "stock") || request.nextUrl.searchParams.get("stock")?.trim().toUpperCase() || "";
 
@@ -86,7 +93,7 @@ export async function DELETE(request: NextRequest) {
       }
     );
   } catch (error) {
-    return errorResponse(error instanceof Error ? error.message : "Unable to update my-port.csv", 500);
+    return errorResponse(error instanceof Error ? error.message : "Unable to update the portfolio", 500);
   }
 }
 

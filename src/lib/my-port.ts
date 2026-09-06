@@ -1,10 +1,19 @@
-import { readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+import "server-only";
 import { normalizeSymbol } from "@/lib/market";
+import { supabaseAdmin } from "@/lib/supabase/server";
 import type { AllocationRule, PortfolioSeed } from "@/types/portfolio";
 
-const myPortPath = path.join(process.cwd(), "public", "my-port.csv");
-const myAllocationPath = path.join(process.cwd(), "public", "my-allocation.csv");
+/**
+ * Portfolio storage. The exported surface is unchanged from the CSV version,
+ * so every page and route handler above it keeps working -- only the backing
+ * store moved to Postgres.
+ *
+ * The CSV version wrote back to public/my-port.csv, which cannot work on
+ * Vercel: the serverless filesystem is read-only, so every upsert and delete
+ * would have failed in production. Docker Compose papered over it locally by
+ * bind-mounting ./public. Postgres removes the constraint entirely.
+ */
+
 const myPortfolioCsvHeader = ["stock", "quantity", "cost basis", "cost currency"];
 
 type PortfolioHoldingValueInput = {
@@ -14,20 +23,72 @@ type PortfolioHoldingValueInput = {
   marketPrice: number;
 };
 
+type HoldingRow = {
+  symbol: string;
+  quantity: string | number;
+  cost_basis: string | number;
+  cost_currency: string | null;
+};
+
+/** Postgres numerics arrive as strings over PostgREST. */
+function num(value: string | number | null | undefined) {
+  if (value == null) return 0;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function rowToSeed(row: HoldingRow): PortfolioSeed {
+  const symbol = row.symbol.trim().toUpperCase();
+  return {
+    id: createPortfolioSeedId(symbol),
+    symbol,
+    quantity: num(row.quantity),
+    costBasis: num(row.cost_basis),
+    costCurrency: (row.cost_currency || "USD").toUpperCase()
+  };
+}
+
 export async function getMyPortfolioSeed(): Promise<PortfolioSeed[]> {
   try {
-    const csv = await readFile(myPortPath, "utf8");
-    return parseMyPortfolioCsv(csv);
-  } catch {
+    const { data, error } = await supabaseAdmin()
+      .from("holdings")
+      .select("symbol, quantity, cost_basis, cost_currency")
+      .order("sort_order", { ascending: true })
+      .order("symbol", { ascending: true });
+
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((row) => rowToSeed(row as HoldingRow));
+  } catch (error) {
+    // Same contract as the CSV version: an unreachable store reads as empty so
+    // the dashboard renders instead of throwing a 500. Log it, though -- a
+    // silent empty table is otherwise indistinguishable from a real one.
+    console.error("getMyPortfolioSeed failed:", error);
     return [];
   }
 }
 
 export async function getMyAllocationRules(): Promise<AllocationRule[]> {
   try {
-    const csv = await readFile(myAllocationPath, "utf8");
-    return parseMyAllocationCsv(csv);
-  } catch {
+    const { data, error } = await supabaseAdmin()
+      .from("allocations")
+      .select("category, symbol, cash_value, cash_currency")
+      .order("sort_order", { ascending: true });
+
+    if (error) throw new Error(error.message);
+
+    return (data ?? []).map((row) => {
+      const cashValue = row.cash_value == null ? undefined : num(row.cash_value as string);
+      const cashCurrency = (row.cash_currency as string | null) || undefined;
+
+      return {
+        category: row.category as string,
+        symbol: (row.symbol as string).toUpperCase(),
+        ...(cashValue === undefined ? {} : { cashValue }),
+        ...(cashCurrency ? { cashCurrency: cashCurrency.toUpperCase() } : {})
+      };
+    });
+  } catch (error) {
+    console.error("getMyAllocationRules failed:", error);
     return [];
   }
 }
@@ -56,17 +117,39 @@ export function createPortfolioSeedFromHoldingValue({
 }
 
 export async function upsertMyPortfolioSeed(seed: PortfolioSeed): Promise<PortfolioSeed[]> {
-  const current = await getMyPortfolioSeed();
-  const next = upsertPortfolioSeeds(current, normalizePortfolioSeedForCsv(seed));
-  await writeFile(myPortPath, serializeMyPortfolioCsv(next), "utf8");
-  return next;
+  const normalized = normalizePortfolioSeedForCsv(seed);
+
+  const { error } = await supabaseAdmin().from("holdings").upsert(
+    {
+      symbol: normalized.symbol,
+      quantity: normalized.quantity,
+      cost_basis: normalized.costBasis,
+      cost_currency: normalized.costCurrency || "USD"
+    },
+    { onConflict: "symbol" }
+  );
+
+  if (error) throw new Error(`Could not save ${normalized.symbol}: ${error.message}`);
+  return getMyPortfolioSeed();
 }
 
 export async function deleteMyPortfolioSeed(stock: string): Promise<PortfolioSeed[]> {
+  const symbol = stock.trim().toUpperCase();
+  if (!symbol) throw new Error("Stock is required");
+
+  // Match the CSV behaviour, which compared symbols through normalizeSymbol,
+  // so "BRK.B" still deletes a row stored as "BRK.B" or "BRK-B".
   const current = await getMyPortfolioSeed();
-  const next = deletePortfolioSeed(current, stock);
-  await writeFile(myPortPath, serializeMyPortfolioCsv(next), "utf8");
-  return next;
+  const targets = current
+    .filter((item) => portfolioSymbolKey(item.symbol) === portfolioSymbolKey(symbol))
+    .map((item) => item.symbol);
+
+  if (targets.length) {
+    const { error } = await supabaseAdmin().from("holdings").delete().in("symbol", targets);
+    if (error) throw new Error(`Could not delete ${symbol}: ${error.message}`);
+  }
+
+  return getMyPortfolioSeed();
 }
 
 export function upsertPortfolioSeeds(current: PortfolioSeed[], seed: PortfolioSeed) {
@@ -85,6 +168,7 @@ export function deletePortfolioSeed(current: PortfolioSeed[], stock: string) {
   return current.filter((item) => portfolioSymbolKey(item.symbol) !== stockKey);
 }
 
+/** Still used to export the table back out as a CSV download. */
 export function serializeMyPortfolioCsv(seeds: PortfolioSeed[]) {
   const rows = seeds.map((seed) => {
     const normalized = normalizePortfolioSeedForCsv(seed);
@@ -100,130 +184,6 @@ export function serializeMyPortfolioCsv(seeds: PortfolioSeed[]) {
   });
 
   return `${myPortfolioCsvHeader.join(",")}\n${rows.join("\n")}\n`;
-}
-
-function parseMyPortfolioCsv(csv: string): PortfolioSeed[] {
-  const [headerLine, ...rows] = csv
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (!headerLine) return [];
-
-  const headers = splitCsvLine(headerLine).map(normalizeHeader);
-  const symbolIndex = headers.indexOf("stock");
-  const valueIndex = headers.indexOf("holdingvalue");
-  const profitIndex = headers.indexOf("%profit");
-  const quantityIndex = headers.indexOf("quantity");
-  const costBasisIndex = headers.indexOf("costbasis");
-  const costCurrencyIndex = headers.indexOf("costcurrency");
-
-  if (symbolIndex < 0) return [];
-
-  return rows.flatMap((row) => {
-    const columns = splitCsvLine(row);
-    const symbol = columns[symbolIndex]?.trim().toUpperCase();
-    const marketValue = readNumber(columns, valueIndex);
-    const profitLossPercent = readNumber(columns, profitIndex);
-    const quantity = readNumber(columns, quantityIndex);
-    const costBasis = readNumber(columns, costBasisIndex);
-    const costCurrency = columns[costCurrencyIndex]?.trim().toUpperCase();
-
-    if (!symbol) {
-      return [];
-    }
-
-    const hasMarketValueProfit = Number.isFinite(marketValue) && Number.isFinite(profitLossPercent);
-    const hasQuantityCost = Number.isFinite(quantity) && Number.isFinite(costBasis);
-
-    if (!hasMarketValueProfit && !hasQuantityCost) return [];
-
-    return {
-      id: createPortfolioSeedId(symbol),
-      symbol,
-      ...(hasMarketValueProfit ? { marketValue, profitLossPercent } : {}),
-      ...(hasQuantityCost ? { quantity, costBasis, costCurrency: costCurrency || "USD" } : {})
-    };
-  });
-}
-
-function parseMyAllocationCsv(csv: string): AllocationRule[] {
-  const [headerLine, ...rows] = csv
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (!headerLine) return [];
-
-  const headers = splitCsvLine(headerLine).map(normalizeHeader);
-  const categoryIndex = headers.indexOf("category");
-  const symbolIndex = headers.indexOf("symbol");
-  const cashValueIndex = headers.indexOf("cashvalue");
-  const cashCurrencyIndex = headers.indexOf("cashcurrency");
-
-  if (categoryIndex < 0 || symbolIndex < 0) return [];
-
-  return rows.flatMap((row) => {
-    const columns = splitCsvLine(row);
-    const category = columns[categoryIndex]?.trim();
-    const symbol = columns[symbolIndex]?.trim().toUpperCase();
-    const cashValue = readNumber(columns, cashValueIndex);
-    const cashCurrency = columns[cashCurrencyIndex]?.trim().toUpperCase();
-
-    if (!category || !symbol) return [];
-
-    return {
-      category,
-      symbol,
-      ...(Number.isFinite(cashValue) ? { cashValue } : {}),
-      ...(cashCurrency ? { cashCurrency } : {})
-    };
-  });
-}
-
-function normalizeHeader(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, "");
-}
-
-function splitCsvLine(line: string) {
-  const columns: string[] = [];
-  let current = "";
-  let inQuotes = false;
-
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    const next = line[index + 1];
-
-    if (char === "\"" && next === "\"") {
-      current += "\"";
-      index += 1;
-      continue;
-    }
-
-    if (char === "\"") {
-      inQuotes = !inQuotes;
-      continue;
-    }
-
-    if (char === "," && !inQuotes) {
-      columns.push(current.trim());
-      current = "";
-      continue;
-    }
-
-    current += char;
-  }
-
-  columns.push(current.trim());
-  return columns;
-}
-
-function readNumber(columns: string[], index: number) {
-  if (index < 0) return undefined;
-  const value = columns[index]?.trim();
-  if (!value) return undefined;
-  const numberValue = Number(value);
-  return Number.isFinite(numberValue) ? numberValue : undefined;
 }
 
 function normalizePortfolioSeedForCsv(seed: PortfolioSeed): PortfolioSeed {

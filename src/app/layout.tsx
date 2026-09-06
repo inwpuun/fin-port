@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { LockButton } from "@/components/lock-button";
 import { SiteNav } from "@/components/site-nav";
 import "./globals.css";
 
@@ -34,7 +35,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                 <small className="block text-sm text-slate-400">market signal console</small>
               </span>
             </Link>
-            <SiteNav />
+            <div className="flex items-center gap-2 lg:justify-self-end">
+              <SiteNav />
+              <LockButton />
+            </div>
           </header>
           {children}
         </main>

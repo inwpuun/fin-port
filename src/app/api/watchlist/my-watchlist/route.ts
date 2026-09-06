@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isAuthorized, unauthorized } from "@/lib/auth";
 import { deleteMyWatchlistSymbol, getMyWatchlistSymbols, upsertMyWatchlistSymbol } from "@/lib/my-watchlist";
 
 export const runtime = "nodejs";
@@ -18,6 +19,8 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  if (!(await isAuthorized(request))) return unauthorized();
+
   const body = await readOptionalJson(request);
   const symbol = readStringField(body, "symbol") || readStringField(body, "stock");
 
@@ -35,11 +38,13 @@ export async function POST(request: NextRequest) {
       }
     );
   } catch (error) {
-    return errorResponse(error instanceof Error ? error.message : "Unable to update my-watchlist.csv", 500);
+    return errorResponse(error instanceof Error ? error.message : "Unable to update the watchlist", 500);
   }
 }
 
 export async function DELETE(request: NextRequest) {
+  if (!(await isAuthorized(request))) return unauthorized();
+
   const body = await readOptionalJson(request);
   const symbol =
     readStringField(body, "symbol") ||
@@ -62,7 +67,7 @@ export async function DELETE(request: NextRequest) {
       }
     );
   } catch (error) {
-    return errorResponse(error instanceof Error ? error.message : "Unable to update my-watchlist.csv", 500);
+    return errorResponse(error instanceof Error ? error.message : "Unable to update the watchlist", 500);
   }
 }
 

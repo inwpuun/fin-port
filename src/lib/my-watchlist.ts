@@ -1,32 +1,71 @@
-import { readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+import "server-only";
 import { normalizeSymbol } from "@/lib/market";
+import { supabaseAdmin } from "@/lib/supabase/server";
 
-const myWatchlistPath = path.join(process.cwd(), "public", "my-watchlist.csv");
+/**
+ * Watchlist storage. Exported surface is unchanged from the CSV version; only
+ * the backing store moved to Postgres, which also makes writes work on Vercel
+ * (the serverless filesystem is read-only, so writeFile always failed there).
+ */
+
 const fallbackWatchlistSymbols = ["AAPL", "MSFT", "NVDA", "VOO", "BTC-USD", "GC=F"];
 
 export async function getMyWatchlistSymbols(): Promise<string[]> {
   try {
-    const csv = await readFile(myWatchlistPath, "utf8");
-    const symbols = parseMyWatchlistCsv(csv);
+    const { data, error } = await supabaseAdmin()
+      .from("watchlist")
+      .select("symbol, sort_order")
+      .order("sort_order", { ascending: true });
+
+    if (error) throw new Error(error.message);
+
+    const symbols = uniqueSymbols((data ?? []).map((row) => row.symbol as string));
     return symbols.length ? symbols : fallbackWatchlistSymbols;
-  } catch {
+  } catch (error) {
+    console.error("getMyWatchlistSymbols failed, using fallbacks:", error);
     return fallbackWatchlistSymbols;
   }
 }
 
 export async function upsertMyWatchlistSymbol(symbol: string): Promise<string[]> {
-  const current = await getMyWatchlistSymbols();
-  const next = upsertWatchlistSymbol(current, symbol);
-  await writeFile(myWatchlistPath, serializeMyWatchlistCsv(next), "utf8");
-  return next;
+  const normalized = normalizeWatchlistSymbol(symbol);
+  if (!normalized) throw new Error("Symbol is required");
+
+  // The CSV version prepended the new symbol. Reproduce that ordering by
+  // giving it a sort_order below every existing row.
+  const { data: head } = await supabaseAdmin()
+    .from("watchlist")
+    .select("sort_order")
+    .order("sort_order", { ascending: true })
+    .limit(1);
+
+  const lowest = Number(head?.[0]?.sort_order ?? 0);
+
+  const { error } = await supabaseAdmin()
+    .from("watchlist")
+    .upsert({ symbol: normalized, sort_order: lowest - 1 }, { onConflict: "symbol" });
+
+  if (error) throw new Error(`Could not save ${normalized}: ${error.message}`);
+  return getMyWatchlistSymbols();
 }
 
 export async function deleteMyWatchlistSymbol(symbol: string): Promise<string[]> {
-  const current = await getMyWatchlistSymbols();
-  const next = deleteWatchlistSymbol(current, symbol);
-  await writeFile(myWatchlistPath, serializeMyWatchlistCsv(next), "utf8");
-  return next;
+  const normalized = normalizeWatchlistSymbol(symbol);
+  if (!normalized) throw new Error("Symbol is required");
+
+  // Stored symbols may predate normalization ("BRK.B" vs "BRK-B"), so resolve
+  // the rows to delete the same way the CSV version compared them.
+  const { data } = await supabaseAdmin().from("watchlist").select("symbol");
+  const targets = (data ?? [])
+    .map((row) => row.symbol as string)
+    .filter((item) => normalizeWatchlistSymbol(item) === normalized);
+
+  if (targets.length) {
+    const { error } = await supabaseAdmin().from("watchlist").delete().in("symbol", targets);
+    if (error) throw new Error(`Could not delete ${normalized}: ${error.message}`);
+  }
+
+  return getMyWatchlistSymbols();
 }
 
 export function upsertWatchlistSymbol(current: string[], symbol: string) {
@@ -41,30 +80,10 @@ export function deleteWatchlistSymbol(current: string[], symbol: string) {
   return current.filter((item) => normalizeWatchlistSymbol(item) !== normalized);
 }
 
+/** Still used to export the watchlist back out as a CSV download. */
 export function serializeMyWatchlistCsv(symbols: string[]) {
   const rows = uniqueSymbols(symbols).map(escapeCsvValue);
   return `symbol\n${rows.join("\n")}\n`;
-}
-
-function parseMyWatchlistCsv(csv: string) {
-  const [headerLine, ...rows] = csv
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (!headerLine) return [];
-
-  const headers = splitCsvLine(headerLine).map((value) => value.trim().toLowerCase());
-  const symbolIndex = headers.indexOf("symbol");
-  const dataRows = symbolIndex >= 0 ? rows : [headerLine, ...rows];
-
-  return uniqueSymbols(
-    dataRows.flatMap((row) => {
-      const columns = splitCsvLine(row);
-      const symbol = columns[symbolIndex >= 0 ? symbolIndex : 0]?.trim();
-      return symbol ? [symbol] : [];
-    })
-  );
 }
 
 function uniqueSymbols(symbols: string[]) {
@@ -83,39 +102,6 @@ function uniqueSymbols(symbols: string[]) {
 
 function normalizeWatchlistSymbol(symbol: string) {
   return normalizeSymbol(symbol.trim().toUpperCase());
-}
-
-function splitCsvLine(line: string) {
-  const columns: string[] = [];
-  let current = "";
-  let inQuotes = false;
-
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    const next = line[index + 1];
-
-    if (char === "\"" && next === "\"") {
-      current += "\"";
-      index += 1;
-      continue;
-    }
-
-    if (char === "\"") {
-      inQuotes = !inQuotes;
-      continue;
-    }
-
-    if (char === "," && !inQuotes) {
-      columns.push(current.trim());
-      current = "";
-      continue;
-    }
-
-    current += char;
-  }
-
-  columns.push(current.trim());
-  return columns;
 }
 
 function escapeCsvValue(value: string) {

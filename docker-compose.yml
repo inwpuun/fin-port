@@ -5,15 +5,15 @@ services:
     image: fin-port:local
     restart: unless-stopped
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    # Reads SUPABASE_* and ADMIN_TOKEN from .env.local. Keys stay in the
+    # container environment; none is baked into the image (see .dockerignore).
+    env_file:
+      - .env.local
     environment:
-      BOT_API_KEY: "${BOT_API_KEY:-}"
       NODE_ENV: production
       PORT: "3000"
     ports:
       - "3000:3000"
-    volumes:
-      - type: bind
-        source: ./public
-        target: /app/public
-        bind:
-          selinux: z
+    # No bind mount for ./public any more. Portfolio and watchlist edits go to
+    # Postgres, so they no longer need to be written back to CSV files -- which
+    # is also why this app can now run on Vercel's read-only filesystem.

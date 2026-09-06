@@ -1,177 +1,126 @@
-import { readdir, readFile } from "fs/promises";
-import path from "path";
+import "server-only";
+import { supabaseAdmin } from "@/lib/supabase/server";
 import type { CashBookTransaction } from "@/types/cash-book";
 
-const cashBookDirectory = path.join(process.cwd(), "public", "cash-book");
+/**
+ * Cash-book reads. The exported surface is unchanged from the CSV version, so
+ * cash-book-dashboard.tsx keeps working; only the source moved to Postgres.
+ *
+ * Rows get there through the importer (npm run db:cash-book, the /cash-book
+ * upload form, or POST /api/cash-book/import), which upserts on a content
+ * hash. That also means `id` is now stable across imports -- the CSV version
+ * used `file:rowIndex`, which shifted whenever a row was inserted upstream.
+ */
 
-type ParsedCashDate = {
-  date: string;
-  dateLabel: string;
-  year: number;
-  month: number;
-  day: number;
-  monthKey: string;
+const CATEGORY_SEPARATOR = "►";
+
+type TransactionRow = {
+  id: string;
+  account: string;
+  transfer_account: string | null;
+  description: string | null;
+  category: string | null;
+  subcategory: string | null;
+  occurred_on: string;
+  occurred_at: string | null;
+  memo: string | null;
+  amount: string | number;
+  currency: string | null;
+  tags: string | null;
+  running_balance: string | number | null;
+  source_file: string | null;
+  source_year: number | null;
 };
 
-export async function getCashBookTransactions() {
-  let files: string[];
+/** PostgREST caps a default response; page through so no month goes missing. */
+const PAGE_SIZE = 1000;
+
+export async function getCashBookTransactions(): Promise<CashBookTransaction[]> {
+  const rows: TransactionRow[] = [];
 
   try {
-    files = await readdir(cashBookDirectory);
-  } catch {
+    for (let page = 0; ; page += 1) {
+      const from = page * PAGE_SIZE;
+
+      const { data, error } = await supabaseAdmin()
+        .from("cash_transactions")
+        .select(
+          "id, account, transfer_account, description, category, subcategory, occurred_on, occurred_at, memo, amount, currency, tags, running_balance, source_file, source_year"
+        )
+        .order("occurred_on", { ascending: false })
+        .order("occurred_at", { ascending: false, nullsFirst: false })
+        .range(from, from + PAGE_SIZE - 1);
+
+      if (error) throw new Error(error.message);
+
+      const batch = (data ?? []) as TransactionRow[];
+      rows.push(...batch);
+      if (batch.length < PAGE_SIZE) break;
+    }
+  } catch (error) {
+    // Same contract as the CSV version: an unreachable store reads as empty so
+    // the dashboard renders instead of throwing. Log it, though -- a silent
+    // empty ledger is otherwise indistinguishable from a real one.
+    console.error("getCashBookTransactions failed:", error);
     return [];
   }
 
-  const csvFiles = files.filter((file) => file.endsWith(".csv")).sort();
-  const parsedFiles = await Promise.all(csvFiles.map((file) => parseCashBookFile(file)));
-
-  return parsedFiles
-    .flat()
-    .filter((transaction) => transaction.categoryGroup !== "Transfers")
-    .sort((first, second) => second.date.localeCompare(first.date) || second.time.localeCompare(first.time));
-}
-
-async function parseCashBookFile(file: string) {
-  const filePath = path.join(cashBookDirectory, file);
-  const sourceYear = Number(file.match(/\d{4}/)?.[0] || 0);
-  const rows = parseCsvRows((await readFile(filePath, "utf8")).replace(/^\uFEFF/, ""));
-  const headerRowIndex = rows.findIndex((row) => row.includes("Name") && row.includes("Amount"));
-
-  if (headerRowIndex < 0) return [];
-
-  const headerIndex = new Map(rows[headerRowIndex].map((header, index) => [cleanText(header), index]));
-
   return rows
-    .slice(headerRowIndex + 1)
-    .map((row, index) => parseCashBookRow(row, headerIndex, file, sourceYear, index))
-    .filter((transaction): transaction is CashBookTransaction => Boolean(transaction));
+    .map(toCashBookTransaction)
+    .filter((transaction) => transaction.categoryGroup !== "Transfers")
+    .sort(
+      (first, second) =>
+        second.date.localeCompare(first.date) || second.time.localeCompare(first.time)
+    );
 }
 
-function parseCashBookRow(
-  row: string[],
-  headerIndex: Map<string, number>,
-  file: string,
-  sourceYear: number,
-  rowIndex: number
-) {
-  const rawDate = getField(row, headerIndex, "Date");
-  const rawAmount = getField(row, headerIndex, "Amount");
-  const amount = parseMoney(rawAmount);
+function toCashBookTransaction(row: TransactionRow): CashBookTransaction {
+  const amount = num(row.amount) ?? 0;
+  const [year, month, day] = row.occurred_on.split("-").map(Number);
 
-  if (!rawDate || amount === null) return null;
-
-  const parsedDate = parseCashDate(rawDate);
-  if (!parsedDate) return null;
-
-  const transferAccount = getField(row, headerIndex, "Transfers");
-  const rawCategory = getField(row, headerIndex, "Category");
-  const description = getField(row, headerIndex, "Description") || transferDescription(transferAccount, amount);
+  const transferAccount = row.transfer_account ?? "";
+  const rawCategory = joinCategory(row.category, row.subcategory);
+  const description =
+    (row.description ?? "").trim() || transferDescription(transferAccount, amount);
   const category = normalizeCategory(rawCategory, transferAccount, description);
-  const currency = getField(row, headerIndex, "Currency") || "THB";
 
   return {
-    id: `${file}:${rowIndex}`,
-    file,
-    sourceYear: sourceYear || parsedDate.year,
-    account: getField(row, headerIndex, "Account"),
+    id: row.id,
+    file: row.source_file ?? "",
+    sourceYear: row.source_year ?? year,
+    account: row.account,
     transferAccount,
     description,
     rawCategory,
     category,
     categoryGroup: normalizeCategoryGroup(category),
-    ...parsedDate,
-    time: getField(row, headerIndex, "Time"),
-    memo: getField(row, headerIndex, "Memo"),
-    amount,
-    currency,
-    tags: getField(row, headerIndex, "Tags"),
-    balance: parseMoney(getField(row, headerIndex, "Balance")),
-    type: amount >= 0 ? "income" : "expense"
-  } satisfies CashBookTransaction;
-}
-
-function parseCsvRows(content: string) {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let quoted = false;
-
-  for (let index = 0; index < content.length; index += 1) {
-    const character = content[index];
-
-    if (character === "\"") {
-      if (quoted && content[index + 1] === "\"") {
-        field += "\"";
-        index += 1;
-      } else {
-        quoted = !quoted;
-      }
-      continue;
-    }
-
-    if (character === "," && !quoted) {
-      row.push(field);
-      field = "";
-      continue;
-    }
-
-    if ((character === "\n" || character === "\r") && !quoted) {
-      if (character === "\r" && content[index + 1] === "\n") index += 1;
-      row.push(field);
-      if (row.some((cell) => cell.trim())) rows.push(row);
-      row = [];
-      field = "";
-      continue;
-    }
-
-    field += character;
-  }
-
-  row.push(field);
-  if (row.some((cell) => cell.trim())) rows.push(row);
-
-  return rows;
-}
-
-function getField(row: string[], headerIndex: Map<string, number>, fieldName: string) {
-  const index = headerIndex.get(fieldName);
-  if (index === undefined) return "";
-  return cleanText(row[index] || "");
-}
-
-function cleanText(value: string) {
-  return value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function parseMoney(value: string) {
-  const normalized = value.replace(/[,+]/g, "").trim();
-  if (!normalized) return null;
-
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function parseCashDate(value: string): ParsedCashDate | null {
-  const [dayValue, monthValue, yearValue] = value.split(/[./-]/).map(Number);
-
-  if (!Number.isFinite(dayValue) || !Number.isFinite(monthValue) || !Number.isFinite(yearValue)) return null;
-
-  const year = yearValue > 2400 ? yearValue - 543 : yearValue;
-  const day = Math.trunc(dayValue);
-  const month = Math.trunc(monthValue);
-
-  if (year < 1900 || month < 1 || month > 12 || day < 1 || day > 31) return null;
-
-  const date = `${year}-${pad(month)}-${pad(day)}`;
-
-  return {
-    date,
+    date: row.occurred_on,
     dateLabel: `${pad(day)}/${pad(month)}/${year}`,
+    monthKey: `${year}-${pad(month)}`,
     year,
     month,
     day,
-    monthKey: `${year}-${pad(month)}`
+    // The dashboard sorts and renders on HH:mm, so trim the stored seconds.
+    time: (row.occurred_at ?? "").slice(0, 5),
+    memo: row.memo ?? "",
+    amount,
+    currency: row.currency || "THB",
+    tags: row.tags ?? "",
+    balance: num(row.running_balance),
+    type: amount >= 0 ? "income" : "expense"
   };
+}
+
+function num(value: string | number | null | undefined) {
+  if (value == null) return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** Rebuilds the exporter's "Parent <sep> Child" string from the split columns. */
+function joinCategory(category: string | null, subcategory: string | null) {
+  if (!category) return "";
+  return subcategory ? `${category} ${CATEGORY_SEPARATOR} ${subcategory}` : category;
 }
 
 function pad(value: number) {
@@ -185,7 +134,7 @@ function transferDescription(transferAccount: string, amount: number) {
 
 function normalizeCategory(rawCategory: string, transferAccount: string, description: string) {
   if (rawCategory) {
-    return rawCategory.replace(/\s*\u25ba\s*/g, " / ");
+    return rawCategory.replace(/\s*►\s*/g, " / ");
   }
 
   if (transferAccount || /^transfer/i.test(description)) return "Transfers";

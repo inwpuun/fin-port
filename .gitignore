@@ -1,7 +1,27 @@
-.next
-.playwright-cli
+# dependencies
 node_modules
-my-allocation.csv
-my-port.csv
-cash-book
+
+# next.js
+.next
+.vercel
+
+# tooling
+.playwright-cli
+
+# env — never commit real keys
 .env
+.env.*
+!.env.example
+
+# private financial data (seed CSVs live in Supabase after import)
+/data
+/public/my-allocation.csv
+/public/my-port.csv
+/public/my-watchlist.csv
+/public/cash-book
+
+# os
+.DS_Store
+
+# typescript incremental build cache
+*.tsbuildinfo
