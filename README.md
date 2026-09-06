@@ -121,6 +121,26 @@ bind-mounting `./public`. That bind mount is no longer needed.
 `cost basis` + `cost currency` for positions such as bitcoin bought in THB.
 Cost basis is the **total** paid, not a unit price.
 
+## Editing a position
+
+`/portfolio` and `/allocation` share one editor (`holding-editor-modal.tsx`).
+Open it from **Add by quantity and buy price** on `/portfolio`, or the **Edit**
+button on any row of either page.
+
+It takes a quantity and a per-unit buy price and stores their product as the
+cost basis, alongside the allocation category. Entering the position this way
+needs no market quote, so it works for assets priced in THB — the holding
+value + % profit form still requires a USD quote to derive a quantity, and says
+so if the symbol returns another currency.
+
+A symbol belongs to exactly one lane. Because `allocations` is keyed on
+`(category, symbol)`, moving a symbol deletes its previous row first; otherwise
+it would be counted in two lanes and inflate the total. Deleting a holding also
+clears its lane, so no symbol is left behind with no value against it.
+
+For the `CASH` pseudo-symbol the editor swaps quantity and price for a cash
+balance and currency, and writes through `/api/allocation`.
+
 ## Cash-book import
 
 The exports have no id column, so each row's primary key is a content hash:
@@ -177,7 +197,8 @@ curl -X POST https://<your-app>/api/cash-book/import \
 | `GET` | `/api/exchange-rate/usd-thb` | none | BOT reference rate |
 | `GET` | `/api/watchlist/my-watchlist` | none | saved symbols |
 | `POST` `DELETE` | `/api/watchlist/my-watchlist` | required | add or remove a symbol |
-| `POST` `DELETE` | `/api/portfolio/my-port` | required | upsert or remove a holding |
+| `POST` `DELETE` | `/api/portfolio/my-port` | required | upsert or remove a holding, and its allocation lane |
+| `GET` `POST` `DELETE` | `/api/allocation` | required | move a symbol between lanes, edit the cash balance |
 | `POST` | `/api/cash-book/import` | required | CSV upsert |
 
 ## Deploying to Vercel

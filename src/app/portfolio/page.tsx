@@ -1,5 +1,5 @@
 import { PortfolioDashboard } from "@/components/portfolio-dashboard";
-import { getMyPortfolioSeed } from "@/lib/my-port";
+import { getMyAllocationRules, getMyPortfolioSeed } from "@/lib/my-port";
 
 // Reads live rows from Postgres, so it must render per request. Without
 // this the page is prerendered at build time and would serve whatever the
@@ -7,7 +7,12 @@ import { getMyPortfolioSeed } from "@/lib/my-port";
 export const dynamic = "force-dynamic";
 
 export default async function PortfolioPage() {
-  const defaultPortfolio = await getMyPortfolioSeed();
+  const [defaultPortfolio, allocationRules] = await Promise.all([
+    getMyPortfolioSeed(),
+    getMyAllocationRules()
+  ]);
 
-  return <PortfolioDashboard defaultPortfolio={defaultPortfolio} />;
+  return (
+    <PortfolioDashboard defaultPortfolio={defaultPortfolio} allocationRules={allocationRules} />
+  );
 }

@@ -72,7 +72,9 @@ export async function getMyAllocationRules(): Promise<AllocationRule[]> {
     const { data, error } = await supabaseAdmin()
       .from("allocations")
       .select("category, symbol, cash_value, cash_currency")
-      .order("sort_order", { ascending: true });
+      .order("sort_order", { ascending: true })
+      .order("category", { ascending: true })
+      .order("symbol", { ascending: true });
 
     if (error) throw new Error(error.message);
 
@@ -91,6 +93,64 @@ export async function getMyAllocationRules(): Promise<AllocationRule[]> {
     console.error("getMyAllocationRules failed:", error);
     return [];
   }
+}
+
+export type AllocationRuleInput = {
+  category: string;
+  symbol: string;
+  cashValue?: number | null;
+  cashCurrency?: string | null;
+};
+
+/**
+ * Moves a symbol into a category, creating the lane if it is new.
+ *
+ * A symbol belongs to exactly one lane, but the table is keyed on
+ * (category, symbol) -- so a move has to clear the symbol's other rows first,
+ * or it would be counted in two categories at once and inflate the total.
+ */
+export async function upsertMyAllocationRule(rule: AllocationRuleInput): Promise<AllocationRule[]> {
+  const symbol = rule.symbol.trim().toUpperCase();
+  const category = rule.category.trim();
+
+  if (!symbol) throw new Error("Symbol is required");
+  if (!category) throw new Error("Category is required");
+
+  const client = supabaseAdmin();
+
+  const { error: clearError } = await client
+    .from("allocations")
+    .delete()
+    .eq("symbol", symbol)
+    .neq("category", category);
+  if (clearError) throw new Error(`Could not move ${symbol}: ${clearError.message}`);
+
+  const cashValue = Number.isFinite(Number(rule.cashValue)) ? Number(rule.cashValue) : null;
+  const cashCurrency = (rule.cashCurrency || "").trim().toUpperCase() || null;
+
+  const { error } = await client.from("allocations").upsert(
+    {
+      category,
+      symbol,
+      cash_value: cashValue,
+      cash_currency: cashCurrency
+    },
+    { onConflict: "category,symbol" }
+  );
+
+  if (error) throw new Error(`Could not save ${symbol} allocation: ${error.message}`);
+  return getMyAllocationRules();
+}
+
+/** Removes a symbol from every allocation lane. */
+export async function deleteMyAllocationRule(symbol: string): Promise<AllocationRule[]> {
+  const clean = symbol.trim().toUpperCase();
+  if (!clean) throw new Error("Symbol is required");
+
+  const { error } = await supabaseAdmin().from("allocations").delete().eq("symbol", clean);
+  if (error) throw new Error(`Could not delete ${clean} allocation: ${error.message}`);
+
+  return getMyAllocationRules();
 }
 
 export function createPortfolioSeedFromHoldingValue({
@@ -113,6 +173,37 @@ export function createPortfolioSeedFromHoldingValue({
     quantity: holdingValue / marketPrice,
     costBasis: holdingValue / profitRatio,
     costCurrency: "USD"
+  });
+}
+
+/**
+ * Builds a seed from a quantity and a per-unit buy price, which is what the
+ * holding editor collects. Unlike the holding-value form this needs no market
+ * quote, so it also works for assets priced in a non-USD currency.
+ */
+export function createPortfolioSeedFromQuantity({
+  stock,
+  quantity,
+  buyPrice,
+  costCurrency = "USD"
+}: {
+  stock: string;
+  quantity: number;
+  buyPrice: number;
+  costCurrency?: string;
+}): PortfolioSeed {
+  const symbol = stock.trim().toUpperCase();
+
+  if (!symbol) throw new Error("Stock is required");
+  if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Quantity must be greater than zero");
+  if (!Number.isFinite(buyPrice) || buyPrice <= 0) throw new Error("Buy price must be greater than zero");
+
+  return normalizePortfolioSeedForCsv({
+    id: "",
+    symbol,
+    quantity,
+    costBasis: quantity * buyPrice,
+    costCurrency
   });
 }
 

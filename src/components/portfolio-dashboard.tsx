@@ -4,9 +4,14 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createHoldingFromPortfolioSeed, enrichHolding } from "@/lib/portfolio";
 import { drawdownRanges, fallbackMarketData, normalizeSymbol } from "@/lib/market";
 import { currencyFormat, percentFormat } from "@/lib/format";
-import type { Holding, HoldingWithMarket, PortfolioSeed } from "@/types/portfolio";
+import type { AllocationRule, Holding, HoldingWithMarket, PortfolioSeed } from "@/types/portfolio";
 import type { DrawdownRange, MarketData } from "@/types/market";
 import { SymbolChartModal } from "./symbol-chart-modal";
+import {
+  HoldingEditorModal,
+  type HoldingEditorSave,
+  type HoldingEditorTarget
+} from "./holding-editor-modal";
 
 const storageKey = "fin-port-holdings-v3";
 
@@ -33,6 +38,7 @@ type PortfolioWriteResponse = {
 };
 
 type PortfolioDeleteResponse = {
+  allocationRules?: AllocationRule[];
   stock: string;
   portfolio: PortfolioSeed[];
 };
@@ -47,8 +53,17 @@ const sortableColumns: Array<{ key: SortKey; label: string }> = [
   { key: "drawdownPercent", label: "From Top" }
 ];
 
-export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: PortfolioSeed[] }) {
+export function PortfolioDashboard({
+  defaultPortfolio,
+  allocationRules: initialAllocationRules = []
+}: {
+  defaultPortfolio: PortfolioSeed[];
+  allocationRules?: AllocationRule[];
+}) {
   const [portfolioSeed, setPortfolioSeed] = useState(defaultPortfolio);
+  const [allocationRules, setAllocationRules] = useState(initialAllocationRules);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorTarget, setEditorTarget] = useState<HoldingEditorTarget | null>(null);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [rows, setRows] = useState<HoldingWithMarket[]>([]);
   const [sort, setSort] = useState<PortfolioSort | null>(null);
@@ -229,6 +244,42 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
     }
   }
 
+  const categories = useMemo(
+    () => [...new Set(allocationRules.map((rule) => rule.category))].sort(),
+    [allocationRules]
+  );
+
+  const categoryBySymbol = useMemo(() => {
+    const map = new Map<string, string>();
+    allocationRules.forEach((rule) => map.set(normalizeSymbol(rule.symbol), rule.category));
+    return map;
+  }, [allocationRules]);
+
+  function openEditor(row?: HoldingWithMarket) {
+    setEditorTarget(
+      row
+        ? {
+            symbol: row.symbol,
+            quantity: row.quantity,
+            buyPrice: row.buyPrice,
+            costCurrency: row.currency,
+            category: categoryBySymbol.get(normalizeSymbol(row.symbol)) ?? ""
+          }
+        : null
+    );
+    setEditorOpen(true);
+  }
+
+  function onEditorSaved(result: HoldingEditorSave) {
+    if (result.allocationRules) setAllocationRules(result.allocationRules);
+    if (result.portfolio) {
+      // Re-materialize from the saved seed so quantity, cost basis and every
+      // derived market figure in the table come from what actually persisted.
+      setPortfolioSeed(result.portfolio);
+      materializeDefaultPortfolio(result.portfolio, drawdownRange);
+    }
+  }
+
   async function removeHolding(symbolToRemove: string) {
     setRemovingSymbol(symbolToRemove);
     setAddError("");
@@ -246,7 +297,8 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Unable to update my-port.csv");
 
-      const { portfolio } = payload as PortfolioDeleteResponse;
+      const { portfolio, allocationRules: nextRules } = payload as PortfolioDeleteResponse;
+      if (nextRules) setAllocationRules(nextRules);
       const removedKey = normalizeSymbol(symbolToRemove);
 
       skipNextRefresh.current = true;
@@ -378,6 +430,16 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
         <section className="glass-panel rounded-3xl p-6">
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Holding Input</p>
           <h2 className="mb-4 text-2xl font-black">Add stock to portfolio</h2>
+          <button
+            type="button"
+            onClick={() => openEditor()}
+            className="mb-4 min-h-12 w-full rounded-2xl bg-gradient-to-r from-white to-[#8af5d6] font-black text-[#05110e]"
+          >
+            Add by quantity and buy price
+          </button>
+          <p className="mb-4 text-xs font-bold uppercase tracking-wide text-slate-500">
+            or enter a holding value
+          </p>
           <form onSubmit={addHolding} className="grid gap-3">
             <label className="field-shell grid gap-1 rounded-2xl px-4 py-3">
               <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Symbol</span>
@@ -440,6 +502,7 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
                       </button>
                     </th>
                   ))}
+                  <th className="px-6 py-4">Category</th>
                   <th className="px-6 py-4"></th>
                 </tr>
               </thead>
@@ -462,14 +525,28 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
                     <td className={`px-6 py-4 font-black ${Math.abs(row.drawdownPercent) >= Number(drawdownLimit || 0) ? "text-amber-signal" : "text-slate-300"}`}>
                       {percentFormat(row.drawdownPercent)}
                     </td>
+                    <td className="px-6 py-4 text-slate-300">
+                      {categoryBySymbol.get(normalizeSymbol(row.symbol)) ?? (
+                        <span className="text-slate-600">unassigned</span>
+                      )}
+                    </td>
                     <td className="px-6 py-4">
-                      <button
-                        onClick={() => removeHolding(row.symbol)}
-                        disabled={isPendingSymbol(removingSymbol, row.symbol)}
-                        className="rounded-full border border-white/10 px-3 py-1 text-sm text-slate-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {isPendingSymbol(removingSymbol, row.symbol) ? "Removing..." : "Remove"}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openEditor(row)}
+                          className="rounded-full border border-cyan-signal/30 bg-cyan-signal/10 px-3 py-1 text-sm font-bold text-cyan-signal transition hover:text-white"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => removeHolding(row.symbol)}
+                          disabled={isPendingSymbol(removingSymbol, row.symbol)}
+                          className="rounded-full border border-white/10 px-3 py-1 text-sm text-slate-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isPendingSymbol(removingSymbol, row.symbol) ? "Removing..." : "Remove"}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -478,6 +555,14 @@ export function PortfolioDashboard({ defaultPortfolio }: { defaultPortfolio: Por
           </div>
         </section>
       </section>
+      {editorOpen && (
+        <HoldingEditorModal
+          target={editorTarget}
+          categories={categories}
+          onClose={() => setEditorOpen(false)}
+          onSaved={onEditorSaved}
+        />
+      )}
       {chartOpen && (
         <SymbolChartModal
           chartType={chartType}

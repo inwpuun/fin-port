@@ -5,6 +5,11 @@ import { fallbackMarketData } from "@/lib/market";
 import { currencyFormat } from "@/lib/format";
 import type { MarketData } from "@/types/market";
 import type { AllocationRule, PortfolioSeed } from "@/types/portfolio";
+import {
+  HoldingEditorModal,
+  type HoldingEditorSave,
+  type HoldingEditorTarget
+} from "./holding-editor-modal";
 
 type DisplayCurrency = "USD" | "THB";
 
@@ -31,12 +36,16 @@ type AllocationGroup = {
 const groupColors = ["#52d6ff", "#14ce99", "#ffcc66", "#ff5278", "#a78bfa", "#38bdf8", "#f97316", "#e5e7eb", "#94a3b8"];
 
 export function AllocationDashboard({
-  allocationRules,
-  portfolioSeed
+  allocationRules: initialAllocationRules,
+  portfolioSeed: initialPortfolioSeed
 }: {
   allocationRules: AllocationRule[];
   portfolioSeed: PortfolioSeed[];
 }) {
+  const [allocationRules, setAllocationRules] = useState(initialAllocationRules);
+  const [portfolioSeed, setPortfolioSeed] = useState(initialPortfolioSeed);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorTarget, setEditorTarget] = useState<HoldingEditorTarget | null>(null);
   const [positions, setPositions] = useState<AllocationPosition[]>([]);
   const [loading, setLoading] = useState(false);
   const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>("USD");
@@ -71,6 +80,39 @@ export function AllocationDashboard({
   const totalValue = groups.reduce((sum, group) => sum + group.value, 0);
   const largestGroup = groups[0];
   const missingPositions = positions.filter((position) => position.source === "missing");
+
+  const categories = useMemo(
+    () => [...new Set(allocationRules.map((rule) => rule.category))].sort(),
+    [allocationRules]
+  );
+
+  function openEditor(position: AllocationPosition) {
+    const rule = allocationRules.find(
+      (item) => normalizeKey(item.symbol) === normalizeKey(position.symbol)
+    );
+    const seed = portfolioSeed.find(
+      (item) => normalizeKey(item.symbol) === normalizeKey(position.symbol)
+    );
+    const quantity = seed?.quantity;
+    const costBasis = seed?.costBasis;
+
+    setEditorTarget({
+      symbol: position.symbol,
+      quantity,
+      // The editor takes a unit price; the seed stores the position total.
+      buyPrice: quantity && costBasis ? costBasis / quantity : undefined,
+      costCurrency: seed?.costCurrency || "USD",
+      category: position.category,
+      cashValue: rule?.cashValue,
+      cashCurrency: rule?.cashCurrency || "THB"
+    });
+    setEditorOpen(true);
+  }
+
+  function onEditorSaved(result: HoldingEditorSave) {
+    if (result.allocationRules) setAllocationRules(result.allocationRules);
+    if (result.portfolio) setPortfolioSeed(result.portfolio);
+  }
 
   async function fetchMarket(symbolInput: string) {
     const url = new URL("/api/market", window.location.origin);
@@ -287,8 +329,64 @@ export function AllocationDashboard({
               </tbody>
             </table>
           </div>
+
+          <div className="border-t border-white/10 p-6">
+            <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Positions</p>
+            <h2 className="text-2xl font-black">Edit a symbol&apos;s lane</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] border-collapse text-left">
+              <thead className="text-xs uppercase tracking-wide text-slate-400">
+                <tr>
+                  <th className="px-6 py-4">Symbol</th>
+                  <th className="px-6 py-4">Category</th>
+                  <th className="px-6 py-4">Value</th>
+                  <th className="px-6 py-4"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {positions.map((position) => (
+                  <tr key={`${position.category}-${position.symbol}`} className="border-t border-white/10">
+                    <td className="px-6 py-4">
+                      <strong>{position.symbol}</strong>
+                      {position.source === "missing" && (
+                        <small className="block text-amber-signal">not in portfolio</small>
+                      )}
+                      {position.source === "cash" && <small className="block text-slate-500">cash balance</small>}
+                    </td>
+                    <td className="px-6 py-4 text-slate-300">{position.category}</td>
+                    <td className="px-6 py-4 font-black">{formatMoney(position.value)}</td>
+                    <td className="px-6 py-4">
+                      <button
+                        type="button"
+                        onClick={() => openEditor(position)}
+                        className="rounded-full border border-cyan-signal/30 bg-cyan-signal/10 px-3 py-1 text-sm font-bold text-cyan-signal transition hover:text-white"
+                      >
+                        Edit
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {positions.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-10 text-center text-slate-400">
+                      No allocation rows yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </section>
       </section>
+      {editorOpen && (
+        <HoldingEditorModal
+          target={editorTarget}
+          categories={categories}
+          onClose={() => setEditorOpen(false)}
+          onSaved={onEditorSaved}
+        />
+      )}
     </div>
   );
 }
