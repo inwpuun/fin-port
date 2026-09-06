@@ -39,10 +39,13 @@ No Supabase credential ever reaches a browser.
 - `proxy.ts` puts the whole site behind a passphrase, so a Vercel deployment
   URL is not a public window onto your finances.
 - `proxy.ts` lets `/api/*` through so the CLI can authenticate with a bearer
-  token instead, so **every writing route checks authorization itself**:
-  `/api/portfolio/my-port`, `/api/watchlist/my-watchlist` and
-  `/api/cash-book/import` all require a valid session cookie or
-  `Authorization: Bearer $ADMIN_TOKEN`.
+  token instead, so **every API route checks authorization itself** -- reads
+  included, not only writes. A GET that returns your watchlist is still your
+  data, and the market and FX routes are gated too so nobody can use the
+  deployment as a free proxy or spend your Bank of Thailand quota.
+- Never use a real portfolio number as a placeholder or default in a Client
+  Component: those strings are compiled into `.next/static`, which is served
+  without the passphrase so the unlock page can boot.
 
 Verify the bundle after any change:
 
@@ -191,12 +194,14 @@ curl -X POST https://<your-app>/api/cash-book/import \
 
 ## API
 
-| Method | Route | Auth | Purpose |
-| --- | --- | --- | --- |
-| `GET` | `/api/market?symbol=&range=&drawdownRange=` | none | quotes and candles |
-| `GET` | `/api/exchange-rate/usd-thb` | none | BOT reference rate |
-| `GET` | `/api/watchlist/my-watchlist` | none | saved symbols |
-| `POST` `DELETE` | `/api/watchlist/my-watchlist` | required | add or remove a symbol |
+Every route requires a session cookie or `Authorization: Bearer $ADMIN_TOKEN`.
+Nothing but `/unlock` and static assets answers without one.
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/market?symbol=&range=&drawdownRange=` | quotes and candles |
+| `GET` | `/api/exchange-rate/usd-thb` | BOT reference rate |
+| `GET` `POST` `DELETE` | `/api/watchlist/my-watchlist` | saved symbols |
 | `POST` `DELETE` | `/api/portfolio/my-port` | required | upsert or remove a holding, and its allocation lane |
 | `GET` `POST` `DELETE` | `/api/allocation` | required | move a symbol between lanes, edit the cash balance |
 | `POST` | `/api/cash-book/import` | required | CSV upsert |

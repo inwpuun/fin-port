@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthorized, unauthorized } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,7 +14,10 @@ type BotReferenceRateResponse = {
 
 const botReferenceRateUrl = "https://gateway.api.bot.or.th/Stat-ReferenceRate/v2/DAILY_REF_RATE/";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  // Gated so an anonymous visitor cannot spend your Bank of Thailand quota.
+  if (!(await isAuthorized(request))) return unauthorized();
+
   const apiKey = process.env.BOT_API_KEY;
 
   if (!apiKey) {

@@ -5,7 +5,11 @@ import { deleteMyWatchlistSymbol, getMyWatchlistSymbols, upsertMyWatchlistSymbol
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  // The saved watchlist is personal data, so reads are gated too -- not just
+  // the writes. Browser fetches are same-origin and carry the session cookie.
+  if (!(await isAuthorized(request))) return unauthorized();
+
   const symbols = await getMyWatchlistSymbols();
 
   return NextResponse.json(

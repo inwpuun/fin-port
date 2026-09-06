@@ -174,7 +174,7 @@ export function HoldingEditorModal({ target, categories, onClose, onSaved }: Pro
               value={symbol}
               onChange={(event) => setSymbol(event.target.value)}
               readOnly={isEdit}
-              placeholder="AAPL"
+              placeholder="Ticker"
               autoFocus={!isEdit}
               className="bg-transparent text-lg outline-none read-only:text-slate-400"
             />
@@ -225,7 +225,7 @@ export function HoldingEditorModal({ target, categories, onClose, onSaved }: Pro
                     step="any"
                     value={quantity}
                     onChange={(event) => setQuantity(event.target.value)}
-                    placeholder="1.70691618"
+                    placeholder="0.00"
                     autoFocus={isEdit}
                     className="bg-transparent text-lg outline-none"
                   />
@@ -240,7 +240,7 @@ export function HoldingEditorModal({ target, categories, onClose, onSaved }: Pro
                     step="any"
                     value={buyPrice}
                     onChange={(event) => setBuyPrice(event.target.value)}
-                    placeholder="187.70"
+                    placeholder="0.00"
                     className="bg-transparent text-lg outline-none"
                   />
                 </label>
