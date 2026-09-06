@@ -1,4 +1,5 @@
 import "server-only";
+import { MIN_TOKEN_LENGTH } from "@/lib/session";
 
 /**
  * Every Supabase credential is read through here, and this module is
@@ -43,5 +44,15 @@ export function hasSecretKey(): boolean {
 }
 
 export function adminToken(): string {
-  return required("ADMIN_TOKEN");
+  const token = required("ADMIN_TOKEN");
+
+  // Nothing else in this design stops a short, guessable passphrase: the gate
+  // has no CAPTCHA and the rate limiter is per-instance only.
+  if (token.length < MIN_TOKEN_LENGTH) {
+    throw new Error(
+      `ADMIN_TOKEN is ${token.length} characters; at least ${MIN_TOKEN_LENGTH} are required. Generate one with: openssl rand -hex 32`
+    );
+  }
+
+  return token;
 }

@@ -217,6 +217,33 @@ Nothing but `/unlock` and static assets answers without one.
 Import into production either by pointing `.env.local` at the same project and
 running `npm run db:import`, or by uploading through `/cash-book`.
 
+### Passphrase hardening
+
+`ADMIN_TOKEN` is the whole gate, so:
+
+- **Generate it, don't invent it.** `openssl rand -hex 32` gives 256 bits;
+  brute force is not a threat at that size. The app refuses to serve at all
+  (503 on every page and API) if the token is under 24 characters, rather than
+  pretending to be protected.
+- **Failed attempts are rate limited** — 10 per 10 minutes on `/unlock`, 20 on
+  bearer-token API calls, keyed by client IP. State is per serverless
+  instance, so this is defence in depth, not a hard global cap; put Vercel's
+  WAF in front of `/unlock` if you want one. A valid session cookie is checked
+  before the limiter, so normal browsing can never throttle itself.
+- **The cookie is not signed with the passphrase directly.** The signing key is
+  `HMAC(ADMIN_TOKEN, "fin-port/session/v1")`, so the typed secret and the MAC
+  key are separate values.
+- **Comparisons run over SHA-256 digests**, which are fixed length, so neither
+  the passphrase check nor the cookie check leaks the length of the input.
+- **`?next=` is parsed, not pattern-matched.** A "starts with `/` but not `//`"
+  check is not enough: URL parsers fold `\` into `/` and strip tabs, so
+  `/\evil.com` and `/<tab>/evil.com` used to escape the origin and could be
+  used to phish the passphrase with a genuine-looking link.
+
+Sessions last 30 days and cannot be revoked individually — the payload is only
+an expiry, with no session id. Changing `ADMIN_TOKEN` invalidates every
+existing cookie at once, which is the revocation mechanism.
+
 ### Rotating a key
 
 Supabase → API Keys → create a new secret key → update it in Vercel → redeploy

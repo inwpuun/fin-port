@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { SESSION_COOKIE, verifySessionCookie } from "@/lib/session";
+import { MIN_TOKEN_LENGTH, SESSION_COOKIE, verifySessionCookie } from "@/lib/session";
 
 /**
  * Gates the whole app behind the unlock passphrase. Without this, a Vercel
@@ -16,6 +16,15 @@ export async function proxy(request: NextRequest) {
   if (!secret) {
     return new NextResponse(
       "ADMIN_TOKEN is not set. Add it in Vercel -> Settings -> Environment Variables.",
+      { status: 503 }
+    );
+  }
+
+  // A short token would make the gate guessable, so refuse to serve at all
+  // rather than pretend the site is protected.
+  if (secret.length < MIN_TOKEN_LENGTH) {
+    return new NextResponse(
+      `ADMIN_TOKEN is too short (${secret.length} chars, minimum ${MIN_TOKEN_LENGTH}). Generate one with: openssl rand -hex 32`,
       { status: 503 }
     );
   }
