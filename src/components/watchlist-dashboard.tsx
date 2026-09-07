@@ -155,14 +155,14 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
         })
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Unable to update my-watchlist.csv");
+      if (!response.ok) throw new Error(payload.error || "Unable to save the watchlist");
 
       const { symbols: nextSymbols } = payload as WatchlistWriteResponse;
       setWatchlistSeed(nextSymbols);
       setSymbols(nextSymbols);
       setSymbol("");
     } catch (error) {
-      setWatchlistError(error instanceof Error ? error.message : "Unable to update my-watchlist.csv");
+      setWatchlistError(error instanceof Error ? error.message : "Unable to save the watchlist");
     } finally {
       setSavingSymbol(false);
     }
@@ -183,14 +183,14 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
         })
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Unable to update my-watchlist.csv");
+      if (!response.ok) throw new Error(payload.error || "Unable to save the watchlist");
 
       const { symbols: nextSymbols } = payload as WatchlistWriteResponse;
       setWatchlistSeed(nextSymbols);
       setSymbols(nextSymbols);
       setRows((current) => current.filter((row) => normalizeSymbol(row.requestSymbol) !== normalizeSymbol(symbolToRemove)));
     } catch (error) {
-      setWatchlistError(error instanceof Error ? error.message : "Unable to update my-watchlist.csv");
+      setWatchlistError(error instanceof Error ? error.message : "Unable to save the watchlist");
     } finally {
       setRemovingSymbol("");
     }

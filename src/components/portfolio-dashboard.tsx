@@ -229,7 +229,7 @@ export function PortfolioDashboard({
         })
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Unable to update my-port.csv");
+      if (!response.ok) throw new Error(payload.error || "Unable to save the holding");
 
       const { seed, portfolio, market } = payload as PortfolioWriteResponse;
       const holding = createHoldingFromPortfolioSeed(seed, market, seed.costBasis);
@@ -243,7 +243,7 @@ export function PortfolioDashboard({
       setHoldingValue("");
       setProfitPercent("");
     } catch (error) {
-      setAddError(error instanceof Error ? error.message : "Unable to update my-port.csv");
+      setAddError(error instanceof Error ? error.message : "Unable to save the holding");
     } finally {
       setAddSaving(false);
     }
@@ -300,7 +300,7 @@ export function PortfolioDashboard({
         })
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Unable to update my-port.csv");
+      if (!response.ok) throw new Error(payload.error || "Unable to save the holding");
 
       const { portfolio, allocationRules: nextRules } = payload as PortfolioDeleteResponse;
       if (nextRules) setAllocationRules(nextRules);
@@ -311,7 +311,7 @@ export function PortfolioDashboard({
       setHoldings((current) => current.filter((holding) => normalizeSymbol(holding.symbol) !== removedKey));
       setRows((current) => current.filter((row) => normalizeSymbol(row.symbol) !== removedKey));
     } catch (error) {
-      setAddError(error instanceof Error ? error.message : "Unable to update my-port.csv");
+      setAddError(error instanceof Error ? error.message : "Unable to save the holding");
     } finally {
       setRemovingSymbol("");
     }

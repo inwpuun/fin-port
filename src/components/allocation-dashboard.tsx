@@ -23,7 +23,7 @@ type AllocationPosition = {
   category: string;
   symbol: string;
   value: number;
-  source: "portfolio" | "cash" | "missing";
+  source: "portfolio" | "cash" | "missing" | "unassigned";
 };
 
 type AllocationGroup = {
@@ -32,6 +32,8 @@ type AllocationGroup = {
   symbols: string[];
   color: string;
 };
+
+const UNASSIGNED_CATEGORY = "Unassigned";
 
 const groupColors = ["#52d6ff", "#14ce99", "#ffcc66", "#ff5278", "#a78bfa", "#38bdf8", "#f97316", "#e5e7eb", "#94a3b8"];
 
@@ -63,7 +65,9 @@ export function AllocationDashboard({
 
     positions.forEach((position) => {
       const current = byCategory.get(position.category) || {
-        category: position.category,
+        // Blank for the placeholder lane, so saving cannot create a literal
+      // "Unassigned" category in the database.
+      category: position.category === UNASSIGNED_CATEGORY ? "" : position.category,
         value: 0,
         symbols: [],
         color: groupColors[byCategory.size % groupColors.length]
@@ -80,6 +84,7 @@ export function AllocationDashboard({
   const totalValue = groups.reduce((sum, group) => sum + group.value, 0);
   const largestGroup = groups[0];
   const missingPositions = positions.filter((position) => position.source === "missing");
+  const unassignedPositions = positions.filter((position) => position.source === "unassigned");
 
   const categories = useMemo(
     () => [...new Set(allocationRules.map((rule) => rule.category))].sort(),
@@ -102,7 +107,9 @@ export function AllocationDashboard({
       // The editor takes a unit price; the seed stores the position total.
       buyPrice: quantity && costBasis ? costBasis / quantity : undefined,
       costCurrency: seed?.costCurrency || "USD",
-      category: position.category,
+      // Blank for the placeholder lane, so saving cannot create a literal
+      // "Unassigned" category in the database.
+      category: position.category === UNASSIGNED_CATEGORY ? "" : position.category,
       cashValue: rule?.cashValue,
       cashCurrency: rule?.cashCurrency || "THB"
     });
@@ -185,7 +192,36 @@ export function AllocationDashboard({
         })
       );
 
-      setPositions(nextPositions);
+      /*
+       * Every position above comes from an allocation rule, so a holding with
+       * no rule used to contribute nothing here -- it counted towards net
+       * worth on /portfolio while the allocation total silently ignored it,
+       * and the two pages disagreed. Adding a holding through the editor sets
+       * a category, but the holding-value form does not, and neither does a
+       * CSV import. Give those an explicit lane so the total is complete and
+       * the gap is visible rather than hidden.
+       */
+      const ruled = new Set(allocationRules.map((rule) => normalizeKey(rule.symbol)));
+      const unruled = portfolioSeed.filter((seed) => !ruled.has(normalizeKey(seed.symbol)));
+
+      const unassigned = await Promise.all(
+        unruled.map(async (seed) => {
+          const value = Number.isFinite(seed.marketValue)
+            ? seed.marketValue!
+            : Number.isFinite(seed.quantity)
+              ? seed.quantity! * (await fetchMarket(seed.symbol)).price
+              : 0;
+
+          return {
+            category: UNASSIGNED_CATEGORY,
+            symbol: seed.symbol,
+            value,
+            source: "unassigned" as const
+          };
+        })
+      );
+
+      setPositions([...nextPositions, ...unassigned]);
     } finally {
       setLoading(false);
     }
@@ -246,8 +282,8 @@ export function AllocationDashboard({
         </article>
 
         <section className="glass-panel rounded-3xl p-6">
-          <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Source File</p>
-          <h2 className="mb-4 text-2xl font-black">public/my-allocation.csv</h2>
+          <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Allocation Lanes</p>
+          <h2 className="mb-4 text-2xl font-black">Controls</h2>
           <div className="grid gap-3">
             <button type="button" onClick={calculateAllocation} className="min-h-12 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 font-bold text-slate-300 hover:text-white">
               {loading ? "Refreshing..." : "Refresh allocation"}
@@ -264,7 +300,13 @@ export function AllocationDashboard({
           {fxError && <p className="mt-3 text-sm text-rose-signal">{fxError}</p>}
           {missingPositions.length > 0 && (
             <p className="mt-3 text-sm text-amber-signal">
-              Missing in my-port.csv: {missingPositions.map((position) => position.symbol).join(", ")}
+              In an allocation lane but not held: {missingPositions.map((position) => position.symbol).join(", ")}
+            </p>
+          )}
+          {unassignedPositions.length > 0 && (
+            <p className="mt-3 text-sm text-amber-signal">
+              Held with no lane: {unassignedPositions.map((position) => position.symbol).join(", ")}. They
+              count towards the total under {UNASSIGNED_CATEGORY}; use Edit below to file them.
             </p>
           )}
         </section>
@@ -353,6 +395,9 @@ export function AllocationDashboard({
                         <small className="block text-amber-signal">not in portfolio</small>
                       )}
                       {position.source === "cash" && <small className="block text-slate-500">cash balance</small>}
+                      {position.source === "unassigned" && (
+                        <small className="block text-amber-signal">no lane assigned</small>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-slate-300">{position.category}</td>
                     <td className="px-6 py-4 font-black">{formatMoney(position.value)}</td>

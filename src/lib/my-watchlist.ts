@@ -77,24 +77,6 @@ export async function deleteMyWatchlistSymbol(symbol: string): Promise<string[]>
   return getMyWatchlistSymbols();
 }
 
-export function upsertWatchlistSymbol(current: string[], symbol: string) {
-  const normalized = normalizeWatchlistSymbol(symbol);
-  if (!normalized) throw new Error("Symbol is required");
-  return uniqueSymbols([normalized, ...current]);
-}
-
-export function deleteWatchlistSymbol(current: string[], symbol: string) {
-  const normalized = normalizeWatchlistSymbol(symbol);
-  if (!normalized) throw new Error("Symbol is required");
-  return current.filter((item) => normalizeWatchlistSymbol(item) !== normalized);
-}
-
-/** Still used to export the watchlist back out as a CSV download. */
-export function serializeMyWatchlistCsv(symbols: string[]) {
-  const rows = uniqueSymbols(symbols).map(escapeCsvValue);
-  return `symbol\n${rows.join("\n")}\n`;
-}
-
 function uniqueSymbols(symbols: string[]) {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -111,8 +93,4 @@ function uniqueSymbols(symbols: string[]) {
 
 function normalizeWatchlistSymbol(symbol: string) {
   return normalizeSymbol(symbol.trim().toUpperCase());
-}
-
-function escapeCsvValue(value: string) {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, "\"\"")}"` : value;
 }

@@ -14,8 +14,6 @@ import type { AllocationRule, PortfolioSeed } from "@/types/portfolio";
  * bind-mounting ./public. Postgres removes the constraint entirely.
  */
 
-const myPortfolioCsvHeader = ["stock", "quantity", "cost basis", "cost currency"];
-
 type PortfolioHoldingValueInput = {
   stock: string;
   holdingValue: number;
@@ -167,7 +165,7 @@ export function createPortfolioSeedFromHoldingValue({
   if (!Number.isFinite(profitPercent) || profitRatio <= 0) throw new Error("% profit must be greater than -100");
   if (!Number.isFinite(marketPrice) || marketPrice <= 0) throw new Error("Market price must be greater than zero");
 
-  return normalizePortfolioSeedForCsv({
+  return normalizeSeed({
     id: createPortfolioSeedId(symbol),
     symbol,
     quantity: holdingValue / marketPrice,
@@ -198,7 +196,7 @@ export function createPortfolioSeedFromQuantity({
   if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Quantity must be greater than zero");
   if (!Number.isFinite(buyPrice) || buyPrice <= 0) throw new Error("Buy price must be greater than zero");
 
-  return normalizePortfolioSeedForCsv({
+  return normalizeSeed({
     id: "",
     symbol,
     quantity,
@@ -208,7 +206,7 @@ export function createPortfolioSeedFromQuantity({
 }
 
 export async function upsertMyPortfolioSeed(seed: PortfolioSeed): Promise<PortfolioSeed[]> {
-  const normalized = normalizePortfolioSeedForCsv(seed);
+  const normalized = normalizeSeed(seed);
 
   const { error } = await supabaseAdmin().from("holdings").upsert(
     {
@@ -243,41 +241,8 @@ export async function deleteMyPortfolioSeed(stock: string): Promise<PortfolioSee
   return getMyPortfolioSeed();
 }
 
-export function upsertPortfolioSeeds(current: PortfolioSeed[], seed: PortfolioSeed) {
-  const seedKey = portfolioSymbolKey(seed.symbol);
-  const existingIndex = current.findIndex((item) => portfolioSymbolKey(item.symbol) === seedKey);
-
-  if (existingIndex < 0) {
-    return [...current, seed];
-  }
-
-  return current.map((item, index) => (index === existingIndex ? seed : item));
-}
-
-export function deletePortfolioSeed(current: PortfolioSeed[], stock: string) {
-  const stockKey = portfolioSymbolKey(stock);
-  return current.filter((item) => portfolioSymbolKey(item.symbol) !== stockKey);
-}
-
-/** Still used to export the table back out as a CSV download. */
-export function serializeMyPortfolioCsv(seeds: PortfolioSeed[]) {
-  const rows = seeds.map((seed) => {
-    const normalized = normalizePortfolioSeedForCsv(seed);
-
-    return [
-      normalized.symbol,
-      formatCsvNumber(normalized.quantity!, 8),
-      formatCsvNumber(normalized.costBasis!, 2),
-      normalized.costCurrency || "USD"
-    ]
-      .map(escapeCsvValue)
-      .join(",");
-  });
-
-  return `${myPortfolioCsvHeader.join(",")}\n${rows.join("\n")}\n`;
-}
-
-function normalizePortfolioSeedForCsv(seed: PortfolioSeed): PortfolioSeed {
+/** Validates and rounds a seed to the precision the holdings table stores. */
+function normalizeSeed(seed: PortfolioSeed): PortfolioSeed {
   const symbol = seed.symbol.trim().toUpperCase();
   const quantity = Number(seed.quantity);
   const costBasis = Number(seed.costBasis);
@@ -310,11 +275,3 @@ function roundTo(value: number, decimalPlaces: number) {
   return Math.round((value + Number.EPSILON) * factor) / factor;
 }
 
-function formatCsvNumber(value: number, decimalPlaces: number) {
-  return value.toFixed(decimalPlaces).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
-}
-
-function escapeCsvValue(value: string | number) {
-  const text = String(value);
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, "\"\"")}"` : text;
-}

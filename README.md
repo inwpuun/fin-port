@@ -23,6 +23,21 @@ Open `http://localhost:3000` and unlock with your `ADMIN_TOKEN`.
 - `/cash-book` ledger with per-year overview, category and description breakdowns, graphs, transaction modals, and CSV import
 - `/unlock` passphrase gate
 
+## Allocation follows the portfolio
+
+A symbol needs an `allocations` row to appear in a lane, and the allocation
+page builds its lanes from those rows. A holding with no row therefore used to
+contribute nothing: it counted towards net worth on `/portfolio` while the
+allocation total silently ignored it, so the two pages disagreed.
+
+Saving through the holding editor sets a category, so that path stays
+consistent. The holding-value + % profit form does not ask for one, and neither
+does `npm run db:seed`, so `/allocation` now gathers any holding without a rule
+into an explicit **Unassigned** lane, counts it in the total, and names the
+symbols so they can be filed. Deleting a holding clears its lane too, so the
+reverse — a lane pointing at nothing — is reported as "in an allocation lane
+but not held".
+
 ## The "Updated" label
 
 Every page shows, next to the logo, when the data behind *that page* was last

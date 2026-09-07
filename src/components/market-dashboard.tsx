@@ -83,7 +83,7 @@ export function MarketDashboard() {
     try {
       const response = await fetch("/api/watchlist/my-watchlist");
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Unable to load my-watchlist.csv");
+      if (!response.ok) throw new Error(payload.error || "Unable to load the watchlist");
       setWatchlist((payload as { symbols: string[] }).symbols);
     } catch (error) {
       addEvent("Watchlist load failed", error instanceof Error ? error.message : "Using default symbols.");
@@ -177,13 +177,13 @@ export function MarketDashboard() {
         })
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Unable to update my-watchlist.csv");
+      if (!response.ok) throw new Error(payload.error || "Unable to save the watchlist");
 
       const { symbols } = payload as WatchlistWriteResponse;
       setWatchlist(symbols);
-      addEvent("Watchlist saved", `${data.symbol} saved to my-watchlist.csv.`);
+      addEvent("Watchlist saved", `${data.symbol} saved to your watchlist.`);
     } catch (error) {
-      addEvent("Watchlist save failed", error instanceof Error ? error.message : "Unable to update my-watchlist.csv.");
+      addEvent("Watchlist save failed", error instanceof Error ? error.message : "Unable to save the watchlist.");
     } finally {
       setWatchlistSaving(false);
     }
