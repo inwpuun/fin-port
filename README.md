@@ -206,6 +206,34 @@ Nothing but `/unlock` and static assets answers without one.
 | `GET` `POST` `DELETE` | `/api/allocation` | required | move a symbol between lanes, edit the cash balance |
 | `POST` | `/api/cash-book/import` | required | CSV upsert |
 
+## Diagnosing a deployment
+
+```sh
+curl -H "Authorization: Bearer $ADMIN_TOKEN" https://<your-app>/api/health
+```
+
+Reports whether Postgres is reachable, a row count per table, which variables
+are *present* (never their values), and warnings for a key pasted with stray
+whitespace or a publishable key sitting in `SUPABASE_SECRET_KEY`.
+
+This exists because a bad credential used to be almost invisible. The data libs
+swallow errors so pages still render, so a wrong `SUPABASE_SECRET_KEY` looked
+like "the holdings table is broken" while the watchlist quietly showed six
+hardcoded starter symbols and appeared healthy. Every table was failing. The
+watchlist no longer substitutes that list on an error -- only on a genuinely
+empty table -- and `/api/health` answers the question directly.
+
+If `database` is `unreachable`, check in order:
+
+1. Is `SUPABASE_SECRET_KEY` set for **this** environment? Vercel scopes
+   variables per Production / Preview / Development, and Preview deployments
+   are a common blind spot.
+2. **Did you redeploy after adding it?** Environment changes do not reach a
+   running deployment until the next deploy.
+3. Any trailing newline or space from pasting? The `warnings` field flags it.
+4. Is it the secret key, not the publishable one? Only the secret key bypasses
+   RLS; the publishable key is denied every table by design.
+
 ## Deploying to Vercel
 
 1. Push to GitHub. `.gitignore` excludes `.env*` and all of `data/`, so no key and no financial data is committed.

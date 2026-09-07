@@ -11,20 +11,29 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 const fallbackWatchlistSymbols = ["AAPL", "MSFT", "NVDA", "VOO", "BTC-USD", "GC=F"];
 
 export async function getMyWatchlistSymbols(): Promise<string[]> {
+  let data;
+
   try {
-    const { data, error } = await supabaseAdmin()
+    const result = await supabaseAdmin()
       .from("watchlist")
       .select("symbol, sort_order")
       .order("sort_order", { ascending: true });
 
-    if (error) throw new Error(error.message);
-
-    const symbols = uniqueSymbols((data ?? []).map((row) => row.symbol as string));
-    return symbols.length ? symbols : fallbackWatchlistSymbols;
+    if (result.error) throw new Error(result.error.message);
+    data = result.data;
   } catch (error) {
-    console.error("getMyWatchlistSymbols failed, using fallbacks:", error);
-    return fallbackWatchlistSymbols;
+    // Deliberately NOT falling back to the starter symbols here. Substituting
+    // a plausible list on a connection or credential failure made a broken
+    // deployment look healthy: the watchlist rendered six sensible tickers
+    // while holdings and allocations came back empty, which reads as "the
+    // holdings table is broken" instead of "the database is unreachable".
+    console.error("getMyWatchlistSymbols failed:", error);
+    return [];
   }
+
+  // Only a genuinely empty table gets the starter list.
+  const symbols = uniqueSymbols((data ?? []).map((row) => row.symbol as string));
+  return symbols.length ? symbols : fallbackWatchlistSymbols;
 }
 
 export async function upsertMyWatchlistSymbol(symbol: string): Promise<string[]> {
