@@ -23,6 +23,26 @@ Open `http://localhost:3000` and unlock with your `ADMIN_TOKEN`.
 - `/cash-book` ledger with per-year overview, category and description breakdowns, graphs, transaction modals, and CSV import
 - `/unlock` passphrase gate
 
+## The "Updated" label
+
+Every page shows, next to the logo, when the data behind *that page* was last
+written. It reads `updated_at`, which each table defaults on insert and bumps
+through the `touch_updated_at` trigger on update:
+
+| Page | Reads |
+| --- | --- |
+| `/` and `/watchlist` | `watchlist` |
+| `/portfolio` and `/allocation` | the later of `holdings` and `allocations` |
+| `/cash-book` | `cash_transactions` |
+
+Because the importer upserts, re-importing an unchanged export still moves the
+timestamp — the label answers "when was this data last written", not "when did
+a value last differ". The absolute time renders first and is pinned to
+Asia/Bangkok so the server and client produce the same string; the relative
+form ("3 hrs ago") replaces it after mount and refreshes each minute. The
+lookup is skipped entirely without a valid session, so `/unlock` never queries
+the database.
+
 ## Security model
 
 No Supabase credential ever reaches a browser.

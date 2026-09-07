@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { cookies } from "next/headers";
+import { DataFreshness } from "@/components/data-freshness";
 import { LockButton } from "@/components/lock-button";
 import { SiteNav } from "@/components/site-nav";
+import { emptyFreshness, getDataFreshness } from "@/lib/data/freshness";
+import { SESSION_COOKIE, verifySessionCookie } from "@/lib/session";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,7 +16,19 @@ export const metadata: Metadata = {
   }
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  /*
+   * /unlock renders through this layout and is reachable without a session, so
+   * gate the lookup on the cookie rather than letting an anonymous visitor
+   * trigger four database queries.
+   */
+  const store = await cookies();
+  const unlocked = await verifySessionCookie(
+    store.get(SESSION_COOKIE)?.value,
+    process.env.ADMIN_TOKEN ?? ""
+  );
+  const freshness = unlocked ? await getDataFreshness() : emptyFreshness;
+
   return (
     <html lang="en">
       <body className="font-sans antialiased">
@@ -26,15 +42,18 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         />
         <main className="relative z-10 mx-auto min-h-screen w-[min(1500px,calc(100%-32px))] py-5 md:py-7">
           <header className="mb-6 grid min-h-20 gap-4 lg:grid-cols-[auto_1fr] lg:items-center">
-            <Link href="/" className="inline-flex items-center gap-3 text-white no-underline">
-              <span className="grid h-12 w-12 place-items-center rounded-2xl border border-cyan-signal/55 bg-cyan-signal/10 font-serif text-lg font-bold shadow-[0_0_34px_rgba(82,214,255,.18)]">
-                FP
-              </span>
-              <span>
-                <strong className="block font-serif text-3xl leading-none md:text-5xl">Fin Port</strong>
-                <small className="block text-sm text-slate-400">market signal console</small>
-              </span>
-            </Link>
+            <div className="flex items-center gap-3">
+              <Link href="/" className="inline-flex items-center gap-3 text-white no-underline">
+                <span className="grid h-12 w-12 place-items-center rounded-2xl border border-cyan-signal/55 bg-cyan-signal/10 font-serif text-lg font-bold shadow-[0_0_34px_rgba(82,214,255,.18)]">
+                  FP
+                </span>
+                <span>
+                  <strong className="block font-serif text-3xl leading-none md:text-5xl">Fin Port</strong>
+                  <small className="block text-sm text-slate-400">market signal console</small>
+                </span>
+              </Link>
+              <DataFreshness freshness={freshness} />
+            </div>
             <div className="flex items-center gap-2 lg:justify-self-end">
               <SiteNav />
               <LockButton />
