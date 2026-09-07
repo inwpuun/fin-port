@@ -114,6 +114,18 @@ npm run db:verify      # parse only, no database: sanity-check a new export
 the same exported functions they had when they read CSV files, so the pages and
 components above them are unchanged — only the backing store moved.
 
+Postgres is the single source of truth, and no page caches rows in the browser.
+The portfolio dashboard used to keep holdings in `localStorage` under
+`fin-port-holdings-v3` and read that cache *before* the server data, returning
+early when it found one. That made sense when the CSV was a read-only seed and
+edits lived only in the browser, but with a real database it shadowed the
+truth: an empty array is truthy once serialized, so opening the app once before
+the import stored `"[]"` and every later visit short-circuited on it and never
+queried again. Because `localStorage` is per-origin, a poisoned Vercel
+deployment showed an empty table while `localhost` looked correct, and
+`/allocation` — which reads the very same holdings without caching — was fine.
+Don't reintroduce a client-side cache for rows the database owns.
+
 That move is also what makes Vercel possible. The CSV version wrote back to
 `public/*.csv` with `writeFile`, which cannot work on a serverless platform
 where the filesystem is read-only; every portfolio and watchlist edit would
@@ -222,6 +234,11 @@ like "the holdings table is broken" while the watchlist quietly showed six
 hardcoded starter symbols and appeared healthy. Every table was failing. The
 watchlist no longer substitutes that list on an error -- only on a genuinely
 empty table -- and `/api/health` answers the question directly.
+
+If `database` is `reachable` with the right row counts but `/portfolio` is
+still empty while `/allocation` shows the same holdings correctly, it is not a
+data problem — see the note below on the removed localStorage cache. Hard
+refresh once; the current build clears the stale key itself.
 
 If `database` is `unreachable`, check in order:
 

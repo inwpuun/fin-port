@@ -13,8 +13,6 @@ import {
   type HoldingEditorTarget
 } from "./holding-editor-modal";
 
-const storageKey = "fin-port-holdings-v3";
-
 type SortKey = "symbol" | "quantity" | "buyPrice" | "currentPrice" | "marketValue" | "profitLoss" | "drawdownPercent";
 type SortDirection = "asc" | "desc";
 type PortfolioSort = {
@@ -89,15 +87,24 @@ export function PortfolioDashboard({
   const skipNextRefresh = useRef(false);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(storageKey);
-    if (stored) {
-      try {
-        setHoldings(JSON.parse(stored) as Holding[]);
-        setBootstrapped(true);
-        return;
-      } catch {
-        window.localStorage.removeItem(storageKey);
-      }
+    /*
+     * Postgres is the source of truth, so always seed from the server.
+     *
+     * This used to read a localStorage cache first and return early if it
+     * found one, which made the table permanently stale: open the app once
+     * before the data was imported and the cache stored "[]", which is truthy,
+     * so every later visit short-circuited on the empty array and never asked
+     * the database again. localStorage is per-origin, so a poisoned Vercel
+     * deployment kept showing nothing while localhost -- a different origin
+     * with a good cache -- looked fine. It also meant edits saved to Postgres
+     * could be shadowed by whatever the browser had kept.
+     */
+    // Drop the abandoned cache so a browser poisoned by the old build does
+    // not keep a stale copy of the portfolio in storage forever.
+    try {
+      window.localStorage.removeItem("fin-port-holdings-v3");
+    } catch {
+      // Private mode or blocked storage: nothing to clean up.
     }
 
     materializeDefaultPortfolio(portfolioSeed, drawdownRange);
@@ -106,7 +113,6 @@ export function PortfolioDashboard({
 
   useEffect(() => {
     if (!bootstrapped) return;
-    window.localStorage.setItem(storageKey, JSON.stringify(holdings));
     if (skipNextRefresh.current) {
       skipNextRefresh.current = false;
       return;
@@ -177,7 +183,6 @@ export function PortfolioDashboard({
       skipNextRefresh.current = true;
       setRows(nextRows);
       setHoldings(nextHoldings);
-      window.localStorage.setItem(storageKey, JSON.stringify(nextHoldings));
     } finally {
       setLoading(false);
       setBootstrapped(true);
@@ -462,7 +467,7 @@ export function PortfolioDashboard({
             {loading ? "Refreshing..." : "Refresh prices"}
           </button>
           <button type="button" onClick={() => materializeDefaultPortfolio(portfolioSeed, drawdownRange)} className="mt-3 w-full rounded-2xl border border-cyan-signal/25 bg-cyan-signal/10 px-4 py-3 font-bold text-cyan-signal hover:text-white">
-            Reset to my-port.csv
+            Reload from database
           </button>
           <button type="button" onClick={toggleThbDisplay} className="mt-3 w-full rounded-2xl border border-amber-signal/30 bg-amber-signal/10 px-4 py-3 font-bold text-amber-signal hover:text-white">
             {fxLoading ? "Loading BOT rate..." : displayCurrency === "THB" ? "Show USD" : "Convert USD to THB"}
