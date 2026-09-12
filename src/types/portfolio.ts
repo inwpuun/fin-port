@@ -22,6 +22,8 @@ export type AllocationRule = {
   cashCurrency?: string;
 };
 
+import type { MarketSignal } from "@/types/market";
+
 export type HoldingWithMarket = Holding & {
   name: string;
   currentPrice: number;
@@ -32,4 +34,5 @@ export type HoldingWithMarket = Holding & {
   previousTop: number;
   drawdownPercent: number;
   currency: string;
+  signal: MarketSignal;
 };

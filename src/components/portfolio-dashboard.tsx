@@ -7,13 +7,14 @@ import { currencyFormat, percentFormat } from "@/lib/format";
 import type { AllocationRule, Holding, HoldingWithMarket, PortfolioSeed } from "@/types/portfolio";
 import type { DrawdownRange, MarketData } from "@/types/market";
 import { SymbolChartModal } from "./symbol-chart-modal";
+import { SignalCell } from "./market-analysis";
 import {
   HoldingEditorModal,
   type HoldingEditorSave,
   type HoldingEditorTarget
 } from "./holding-editor-modal";
 
-type SortKey = "symbol" | "quantity" | "buyPrice" | "currentPrice" | "marketValue" | "profitLoss" | "drawdownPercent";
+type SortKey = "symbol" | "quantity" | "buyPrice" | "currentPrice" | "marketValue" | "profitLoss" | "drawdownPercent" | "signal";
 type SortDirection = "asc" | "desc";
 type PortfolioSort = {
   key: SortKey;
@@ -21,7 +22,6 @@ type PortfolioSort = {
 };
 
 type DisplayCurrency = "USD" | "THB";
-type ChartType = "candles" | "area";
 
 type UsdThbRate = {
   rate: number;
@@ -48,7 +48,8 @@ const sortableColumns: Array<{ key: SortKey; label: string }> = [
   { key: "currentPrice", label: "Now" },
   { key: "marketValue", label: "Value" },
   { key: "profitLoss", label: "P/L" },
-  { key: "drawdownPercent", label: "From Top" }
+  { key: "drawdownPercent", label: "From Top" },
+  { key: "signal", label: "Signal" }
 ];
 
 export function PortfolioDashboard({
@@ -74,11 +75,7 @@ export function PortfolioDashboard({
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError] = useState("");
   const [removingSymbol, setRemovingSymbol] = useState("");
-  const [chartOpen, setChartOpen] = useState(false);
-  const [chartMarket, setChartMarket] = useState<MarketData | null>(null);
-  const [chartLoading, setChartLoading] = useState(false);
-  const [chartError, setChartError] = useState("");
-  const [chartType, setChartType] = useState<ChartType>("area");
+  const [chartSymbol, setChartSymbol] = useState("");
   const [bootstrapped, setBootstrapped] = useState(false);
   const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>("USD");
   const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(null);
@@ -317,21 +314,8 @@ export function PortfolioDashboard({
     }
   }
 
-  async function openSymbolChart(symbolInput: string) {
-    setChartOpen(true);
-    setChartMarket(null);
-    setChartError("");
-    setChartLoading(true);
-    setChartType("area");
-
-    try {
-      const market = await fetchMarket(symbolInput, drawdownRange);
-      setChartMarket(market);
-    } catch (error) {
-      setChartError(error instanceof Error ? error.message : "Unable to load chart");
-    } finally {
-      setChartLoading(false);
-    }
+  function openSymbolChart(symbolInput: string) {
+    setChartSymbol(symbolInput);
   }
 
   function changeSort(key: SortKey) {
@@ -486,7 +470,7 @@ export function PortfolioDashboard({
             <h2 className="text-2xl font-black">Holdings table</h2>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] border-collapse text-left">
+            <table className="w-full min-w-[1060px] border-collapse text-left">
               <thead className="text-xs uppercase tracking-wide text-slate-400">
                 <tr>
                   {sortableColumns.map((column) => (
@@ -530,6 +514,9 @@ export function PortfolioDashboard({
                     <td className={`px-6 py-4 font-black ${Math.abs(row.drawdownPercent) >= Number(drawdownLimit || 0) ? "text-amber-signal" : "text-slate-300"}`}>
                       {percentFormat(row.drawdownPercent)}
                     </td>
+                    <td className="px-6 py-4">
+                      <SignalCell signal={row.signal} />
+                    </td>
                     <td className="px-6 py-4 text-slate-300">
                       {categoryBySymbol.get(normalizeSymbol(row.symbol)) ?? (
                         <span className="text-slate-600">unassigned</span>
@@ -568,15 +555,8 @@ export function PortfolioDashboard({
           onSaved={onEditorSaved}
         />
       )}
-      {chartOpen && (
-        <SymbolChartModal
-          chartType={chartType}
-          data={chartMarket}
-          error={chartError}
-          loading={chartLoading}
-          onChartTypeChange={setChartType}
-          onClose={() => setChartOpen(false)}
-        />
+      {chartSymbol && (
+        <SymbolChartModal symbol={chartSymbol} drawdownRange={drawdownRange} onClose={() => setChartSymbol("")} />
       )}
     </div>
   );
@@ -600,6 +580,7 @@ function quantityFormat(value: number) {
 
 function getSortValue(row: HoldingWithMarket, key: SortKey) {
   if (key === "symbol") return row.symbol;
+  if (key === "signal") return row.signal.score;
   return row[key];
 }
 

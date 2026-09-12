@@ -14,7 +14,8 @@
     "db:cash-book": "tsx scripts/import.ts cash-book",
     "db:import": "tsx scripts/import.ts all",
     "typecheck": "tsc --noEmit",
-    "db:verify": "tsx scripts/verify-parse.ts"
+    "db:verify": "tsx scripts/verify-parse.ts",
+    "check:analytics": "tsx scripts/check-analytics.ts"
   },
   "engines": {
     "node": ">=18"

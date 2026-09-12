@@ -16,9 +16,9 @@ Open `http://localhost:3000` and unlock with your `ADMIN_TOKEN`.
 
 ## Pages
 
-- `/` market watch with TradingView-style chart, watchlist, price alerts, and drawdown-from-top alerts
+- `/` market watch with a TradingView-style chart readable through three lenses, a metrics panel per lens, a composite read, and the watchlist
 - `/portfolio` holdings tracker with calculated buy price, quantity, live market value, total net worth, P/L, and drawdown flags
-- `/watchlist` watchlist tracker with live prices, one-year moves, and drawdown flags
+- `/watchlist` watchlist tracker with live prices, one-year moves, drawdown flags, and a signal column
 - `/allocation` allocation chart and category table
 - `/cash-book` ledger with per-year overview, category and description breakdowns, graphs, transaction modals, and CSV import
 - `/unlock` passphrase gate
@@ -246,7 +246,7 @@ Nothing but `/unlock` and static assets answers without one.
 
 | Method | Route | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/market?symbol=&range=&drawdownRange=` | quotes and candles |
+| `GET` | `/api/market?symbol=&range=&drawdownRange=&overlays=` | quotes, candles and analytics |
 | `GET` | `/api/exchange-rate/usd-thb` | BOT reference rate |
 | `GET` `POST` `DELETE` | `/api/watchlist/my-watchlist` | saved symbols |
 | `POST` `DELETE` | `/api/portfolio/my-port` | required | upsert or remove a holding, and its allocation lane |
@@ -336,15 +336,59 @@ sessions stop validating immediately, since the cookie is signed with it.
 `BTC-USD` or `BTC` for bitcoin; `^GSPC`, `^IXIC`, `^DJI`, `^NDX` for indices.
 `BRK.B` maps to `BRK-B` automatically.
 
-## Alerts
+## Reading the chart
 
-Load a symbol, enter a price threshold or a drawdown percentage from the
-previous top, choose the top window, and click `Arm alerts`.
+Every chart -- the market page and the symbol modal on `/portfolio` and
+`/watchlist` -- can be read through three lenses, switched with the
+**Trend / Risk / Value** control. Each one changes what is plotted, adds its own
+lower pane, and swaps the metrics panel beside it:
 
-Drawdown windows: 1 week, 2 weeks, 1 month, 2 months, 3 months, 1 year.
+| Lens | Chart | Answers |
+| --- | --- | --- |
+| **Trend** | 50/200-day averages, golden and death crosses marked, lower pane of % from the 200-day average | Is this in an up regime? |
+| **Risk** | Underwater drawdown curve, plus annualised 60-day volatility | How large a position, and is this a good moment? |
+| **Value** | Least-squares fit of log price with +/-1 and +/-2 sigma bands, lower pane of sigma from trend | Is the price stretched against its own trend? |
 
-Browser notifications require the notification toggle plus browser permission.
-They work while the app is open.
+Ranges run 1M, 3M, 6M, 1Y, 2Y, 5Y, and the axis defaults to logarithmic so
+equal percentage moves get equal height. Each lens panel carries a "how it is
+traded" line, and the composite panel weights the three (45% trend, 35% value,
+20% risk) into one label, listing the five facts that produced it.
+
+**[docs/chart-methods.md](docs/chart-methods.md)** has the full write-up: what
+each statistic is, the published work behind it, how it is computed here, where
+it fails, what was deliberately left out, and why the composite is a weighted
+read of the evidence rather than a backtest.
+
+To check the math without a browser:
+
+```sh
+npm run check:analytics        # synthetic series with known answers
+npm run check:analytics NVDA   # and a live symbol at 6mo, 1y and 5y
+```
+
+### Warm-up, and why a payload is what it is
+
+A 200-day average and twelve-month momentum are undefined on the first bar of a
+six-month window, so every request loads roughly 14 extra months of history and
+returns only the range asked for. A 5Y chart pulls ten years from the provider.
+`analytics.bars` and `analytics.historyBars` report both counts, and the chart
+footer shows them.
+
+Per-bar overlays cost real bytes over a five-year window, so only what cannot be
+recomputed from the candles is sent: the averages and the volatility (they need
+warm-up bars the window does not carry) and the drawdown (its peak may sit
+before the window). The regression channel and the z-score line are drawn from
+the three numbers in `analytics.value.logFit`, and a route only pays for
+overlays if it asks with `overlays=1` -- the tables do not.
+
+### Alerts were removed
+
+`/` used to arm a price threshold and a drawdown threshold and raise browser
+notifications. That is gone, along with the notification permission toggle: an
+alert that only fires while a tab happens to be open is not a monitoring
+system. The drawdown *measurement* stayed -- `previousTop`, `drawdownPercent`
+and the top-window selector are still on `/`, `/portfolio` and `/watchlist`, and
+the risk lens reports the same fall against the whole loaded history.
 
 ## Docker
 

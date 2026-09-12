@@ -2,9 +2,11 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { drawdownRanges, fallbackMarketData, normalizeSymbol } from "@/lib/market";
+import { toMarketSignal } from "@/lib/analytics";
 import { currencyFormat, percentFormat } from "@/lib/format";
 import type { DrawdownRange, MarketData } from "@/types/market";
 import { SymbolChartModal } from "./symbol-chart-modal";
+import { SignalCell } from "./market-analysis";
 
 const fallbackSymbols = ["AAPL", "MSFT", "NVDA", "VOO", "BTC-USD", "GC=F"];
 
@@ -12,7 +14,7 @@ type WatchlistRow = MarketData & {
   requestSymbol: string;
 };
 
-type SortKey = "symbol" | "price" | "changePercent" | "rangeChange" | "drawdownPercent" | "previousTop";
+type SortKey = "symbol" | "price" | "changePercent" | "rangeChange" | "drawdownPercent" | "previousTop" | "signal";
 type SortDirection = "asc" | "desc";
 type WatchlistSort = {
   key: SortKey;
@@ -20,7 +22,6 @@ type WatchlistSort = {
 };
 
 type DisplayCurrency = "USD" | "THB";
-type ChartType = "candles" | "area";
 
 type UsdThbRate = {
   rate: number;
@@ -39,7 +40,8 @@ const sortableColumns: Array<{ key: SortKey; label: string }> = [
   { key: "changePercent", label: "Day" },
   { key: "rangeChange", label: "1Y Move" },
   { key: "drawdownPercent", label: "From Top" },
-  { key: "previousTop", label: "Top" }
+  { key: "previousTop", label: "Top" },
+  { key: "signal", label: "Signal" }
 ];
 
 export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[] }) {
@@ -55,9 +57,7 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
   const [savingSymbol, setSavingSymbol] = useState(false);
   const [removingSymbol, setRemovingSymbol] = useState("");
   const [watchlistError, setWatchlistError] = useState("");
-  const [chartOpen, setChartOpen] = useState(false);
-  const [chartMarket, setChartMarket] = useState<MarketData | null>(null);
-  const [chartType, setChartType] = useState<ChartType>("area");
+  const [chartRow, setChartRow] = useState<WatchlistRow | null>(null);
   const [bootstrapped, setBootstrapped] = useState(false);
   const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>("USD");
   const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(null);
@@ -201,9 +201,7 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
   }
 
   function openSymbolChart(row: WatchlistRow) {
-    setChartMarket(row);
-    setChartType("area");
-    setChartOpen(true);
+    setChartRow(row);
   }
 
   function changeSort(key: SortKey) {
@@ -326,7 +324,7 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
             <h2 className="text-2xl font-black">Watchlist table</h2>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] border-collapse text-left">
+            <table className="w-full min-w-[1060px] border-collapse text-left">
               <thead className="text-xs uppercase tracking-wide text-slate-400">
                 <tr>
                   {sortableColumns.map((column) => (
@@ -371,6 +369,9 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
                     </td>
                     <td className="px-6 py-4">{formatMoney(row.previousTop, row.currency)}</td>
                     <td className="px-6 py-4">
+                      <SignalCell signal={toMarketSignal(row.analytics)} />
+                    </td>
+                    <td className="px-6 py-4">
                       <button
                         onClick={() => removeSymbol(row.requestSymbol)}
                         disabled={isPendingSymbol(removingSymbol, row.requestSymbol)}
@@ -386,12 +387,12 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
           </div>
         </section>
       </section>
-      {chartOpen && (
+      {chartRow && (
         <SymbolChartModal
-          chartType={chartType}
-          data={chartMarket}
-          onChartTypeChange={setChartType}
-          onClose={() => setChartOpen(false)}
+          symbol={chartRow.symbol}
+          seed={chartRow}
+          drawdownRange={drawdownRange}
+          onClose={() => setChartRow(null)}
         />
       )}
     </div>
@@ -417,6 +418,7 @@ function isPendingSymbol(pendingSymbol: string, rowSymbol: string) {
 
 function getSortValue(row: WatchlistRow, key: SortKey) {
   if (key === "symbol") return row.symbol;
+  if (key === "signal") return row.analytics.verdict.score;
   return row[key];
 }
 

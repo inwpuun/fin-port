@@ -1,4 +1,12 @@
-import type { AssetType, Candle, DrawdownRange, MarketData, VolumePoint } from "@/types/market";
+import { analyseMarket } from "@/lib/analytics";
+import type {
+  AssetType,
+  Candle,
+  DrawdownRange,
+  MarketData,
+  MarketRange,
+  VolumePoint
+} from "@/types/market";
 
 type YahooChartResult = {
   meta?: {
@@ -36,7 +44,6 @@ const aliases = new Map<string, string>([
   ["DOW", "^DJI"],
   ["DJI", "^DJI"],
   ["VIX", "^VIX"],
-  ["BRK.B", "BRK-B"],
   ["BRK/B", "BRK-B"]
 ]);
 
@@ -58,8 +65,26 @@ const rangeDays = new Map<string, number>([
   ["3mo", 93],
   ["6mo", 186],
   ["1y", 366],
+  ["2y", 366 * 2],
   ["5y", 366 * 5]
 ]);
+
+/**
+ * Every average, momentum figure and volatility estimate on the chart needs
+ * bars from *before* the window to be defined on its first bar. Fourteen
+ * months of slack covers the 200-day average and twelve-month momentum, so a
+ * six-month chart still opens with a 200-day line already drawn.
+ */
+const WARMUP_DAYS = 420;
+
+export const marketRanges: Array<{ value: MarketRange; short: string; label: string }> = [
+  { value: "1mo", short: "1M", label: "1 month" },
+  { value: "3mo", short: "3M", label: "3 months" },
+  { value: "6mo", short: "6M", label: "6 months" },
+  { value: "1y", short: "1Y", label: "1 year" },
+  { value: "2y", short: "2Y", label: "2 years" },
+  { value: "5y", short: "5Y", label: "5 years" }
+];
 
 export const drawdownRanges: Array<{ value: DrawdownRange; label: string }> = [
   { value: "1w", label: "1 week" },
@@ -72,6 +97,11 @@ export const drawdownRanges: Array<{ value: DrawdownRange; label: string }> = [
 
 export function normalizeDrawdownRange(value: string | null | undefined): DrawdownRange {
   const match = drawdownRanges.find((item) => item.value === value);
+  return match?.value || "1y";
+}
+
+export function normalizeRange(value: string | null | undefined): MarketRange {
+  const match = marketRanges.find((item) => item.value === value);
   return match?.value || "1y";
 }
 
@@ -106,34 +136,77 @@ function getDrawdownLabel(range: DrawdownRange) {
   return drawdownRanges.find((item) => item.value === range)?.label || "1 year";
 }
 
-function getProviderRange(chartRange: string, drawdownRange: DrawdownRange) {
-  const requiredDays = Math.max(getRangeDays(chartRange), getRangeDays(drawdownRange));
-  if (requiredDays <= 31) return "1mo";
-  if (requiredDays <= 93) return "3mo";
-  if (requiredDays <= 186) return "6mo";
-  if (requiredDays <= 366) return "1y";
-  return "5y";
+function getRangeLabel(range: MarketRange) {
+  return marketRanges.find((item) => item.value === range)?.label || "1 year";
 }
 
-function filterCandlesByDays<T extends { time: string }>(items: T[], days: number) {
+function getProviderRange(chartRange: string, drawdownRange: DrawdownRange) {
+  const requiredDays = Math.max(getRangeDays(chartRange), getRangeDays(drawdownRange)) + WARMUP_DAYS;
+  if (requiredDays <= 366) return "1y";
+  if (requiredDays <= 366 * 2) return "2y";
+  if (requiredDays <= 366 * 5) return "5y";
+  return "10y";
+}
+
+/** First index within `days` of the last bar, so the window and its warm-up stay one array. */
+function findWindowStart<T extends { time: string }>(items: T[], days: number) {
   const last = items.at(-1);
-  if (!last) return items;
-  const lastTime = new Date(`${last.time}T00:00:00Z`).getTime();
-  const startTime = lastTime - days * 24 * 60 * 60 * 1000;
-  return items.filter((item) => new Date(`${item.time}T00:00:00Z`).getTime() >= startTime);
+  if (!last) return 0;
+  const startTime = new Date(`${last.time}T00:00:00Z`).getTime() - days * 24 * 60 * 60 * 1000;
+  const index = items.findIndex((item) => new Date(`${item.time}T00:00:00Z`).getTime() >= startTime);
+  return index < 0 ? 0 : index;
+}
+
+function assemble(
+  history: Candle[],
+  historyVolume: VolumePoint[],
+  chartRange: MarketRange,
+  drawdownRange: DrawdownRange,
+  includeOverlays: boolean
+) {
+  const windowStart = findWindowStart(history, getRangeDays(chartRange));
+  const candles = history.slice(windowStart);
+  const volume = historyVolume.slice(windowStart);
+  const drawdownCandles = history.slice(findWindowStart(history, getRangeDays(drawdownRange)));
+  const first = candles[0];
+  const last = candles.at(-1)!;
+  const previous = candles.at(-2) || first;
+  const change = last.close - previous.close;
+  const previousTop = calculatePreviousTop(drawdownCandles);
+  const { analytics, overlays } = analyseMarket(history, windowStart);
+
+  return {
+    candles,
+    volume,
+    analytics,
+    overlays: includeOverlays ? overlays : undefined,
+    price: last.close,
+    previousClose: previous.close,
+    change: compactNumber(change),
+    changePercent: compactNumber(previous.close ? (change / previous.close) * 100 : 0),
+    rangeChange: compactNumber(first.close ? ((last.close - first.close) / first.close) * 100 : 0),
+    range: chartRange,
+    rangeLabel: getRangeLabel(chartRange),
+    previousTop: compactNumber(previousTop),
+    drawdownPercent: compactNumber(previousTop ? ((last.close - previousTop) / previousTop) * 100 : 0),
+    drawdownRange,
+    drawdownLabel: getDrawdownLabel(drawdownRange),
+    marketTime: last.time || null
+  };
 }
 
 export function buildMarketData(
   result: YahooChartResult,
   symbol: string,
-  chartRange = "6mo",
-  drawdownRange: DrawdownRange = "1y"
+  chartRange: MarketRange = "1y",
+  drawdownRange: DrawdownRange = "1y",
+  includeOverlays = false
 ): MarketData {
   const timestamps = result.timestamp || [];
   const quote = result.indicators?.quote?.[0] || {};
   const adjclose = result.indicators?.adjclose?.[0]?.adjclose || [];
-  const allCandles: Candle[] = [];
-  const allVolume: VolumePoint[] = [];
+  const history: Candle[] = [];
+  const historyVolume: VolumePoint[] = [];
 
   for (let index = 0; index < timestamps.length; index += 1) {
     const close = quote.close?.[index] ?? adjclose[index];
@@ -145,16 +218,15 @@ export function buildMarketData(
     if (![open, high, low, close].every((value) => Number.isFinite(value))) continue;
 
     const time = new Date(timestamps[index] * 1000).toISOString().slice(0, 10);
-    const candle = {
+
+    history.push({
       time,
       open: compactNumber(open as number),
       high: compactNumber(high as number),
       low: compactNumber(low as number),
       close: compactNumber(close as number)
-    };
-
-    allCandles.push(candle);
-    allVolume.push({
+    });
+    historyVolume.push({
       time,
       value: Number.isFinite(vol) ? Number(vol) : 0,
       color:
@@ -164,22 +236,10 @@ export function buildMarketData(
     });
   }
 
-  if (!allCandles.length) {
+  if (!history.length) {
     throw new Error("No valid candles returned for this symbol");
   }
 
-  const candles = filterCandlesByDays(allCandles, getRangeDays(chartRange));
-  const chartTimeSet = new Set(candles.map((candle) => candle.time));
-  const volume = allVolume.filter((item) => chartTimeSet.has(item.time));
-  const drawdownCandles = filterCandlesByDays(allCandles, getRangeDays(drawdownRange));
-  const first = candles[0];
-  const last = candles.at(-1)!;
-  const previous = candles.at(-2) || first;
-  const change = last.close - previous.close;
-  const changePercent = previous.close ? (change / previous.close) * 100 : 0;
-  const rangeChange = first.close ? ((last.close - first.close) / first.close) * 100 : 0;
-  const previousTop = calculatePreviousTop(drawdownCandles);
-  const drawdownPercent = previousTop ? ((last.close - previousTop) / previousTop) * 100 : 0;
   const meta = result.meta || {};
   const known = knownMetadata.get(symbol);
 
@@ -189,23 +249,18 @@ export function buildMarketData(
     type: known?.type || classifySymbol(symbol),
     currency: meta.currency || "USD",
     exchange: meta.exchangeName || meta.fullExchangeName || "",
-    price: last.close,
-    previousClose: previous.close,
-    change: compactNumber(change),
-    changePercent: compactNumber(changePercent),
-    rangeChange: compactNumber(rangeChange),
-    previousTop: compactNumber(previousTop),
-    drawdownPercent: compactNumber(drawdownPercent),
-    drawdownRange,
-    drawdownLabel: getDrawdownLabel(drawdownRange),
-    candles,
-    volume,
-    marketTime: last.time || null,
-    source: "Yahoo Finance chart API"
+    source: "Yahoo Finance chart API",
+    ...assemble(history, historyVolume, chartRange, drawdownRange, includeOverlays)
   };
 }
 
-export async function fetchMarketData(symbolInput: string, range = "6mo", interval = "1d", drawdownRange: DrawdownRange = "1y") {
+export async function fetchMarketData(
+  symbolInput: string,
+  range: MarketRange = "1y",
+  interval = "1d",
+  drawdownRange: DrawdownRange = "1y",
+  includeOverlays = false
+) {
   const symbol = normalizeSymbol(symbolInput);
   const yahooUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`);
   yahooUrl.searchParams.set("range", getProviderRange(range, drawdownRange));
@@ -236,16 +291,21 @@ export async function fetchMarketData(symbolInput: string, range = "6mo", interv
     throw new Error("No chart data returned for this symbol");
   }
 
-  return buildMarketData(result, symbol, range, drawdownRange);
+  return buildMarketData(result, symbol, range, drawdownRange, includeOverlays);
 }
 
-export function fallbackMarketData(symbolInput: string, range = "6mo", drawdownRange: DrawdownRange = "1y"): MarketData {
+export function fallbackMarketData(
+  symbolInput: string,
+  range: MarketRange = "1y",
+  drawdownRange: DrawdownRange = "1y",
+  includeOverlays = false
+): MarketData {
   const symbol = normalizeSymbol(symbolInput);
   const seed = [...symbol].reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  const count = Math.max(getRangeDays(range), getRangeDays(drawdownRange));
+  const count = Math.max(getRangeDays(range), getRangeDays(drawdownRange)) + WARMUP_DAYS;
   const base = symbol === "THB=X" ? 36 : symbol.includes("BTC") ? 65000 : symbol.includes("GC") ? 2350 : symbol.startsWith("^") ? 5200 : 180;
-  const candles: Candle[] = [];
-  const volume: VolumePoint[] = [];
+  const history: Candle[] = [];
+  const historyVolume: VolumePoint[] = [];
   let price = base + (seed % 47);
 
   for (let index = count; index >= 0; index -= 1) {
@@ -259,29 +319,20 @@ export function fallbackMarketData(symbolInput: string, range = "6mo", drawdownR
     const low = Math.min(open, close) - Math.abs(drift) * 0.35 - base * 0.003;
     price = close;
     const time = date.toISOString().slice(0, 10);
-    candles.push({
+
+    history.push({
       time,
       open: compactNumber(open),
       high: compactNumber(high),
       low: compactNumber(low),
       close: compactNumber(close)
     });
-    volume.push({
+    historyVolume.push({
       time,
       value: Math.round(1_000_000 + Math.abs(wave) * 40_000 + seed * 1200),
       color: close >= open ? "rgba(20, 206, 153, 0.34)" : "rgba(255, 82, 120, 0.34)"
     });
   }
-
-  const chartCandles = filterCandlesByDays(candles, getRangeDays(range));
-  const chartTimeSet = new Set(chartCandles.map((candle) => candle.time));
-  const chartVolume = volume.filter((item) => chartTimeSet.has(item.time));
-  const drawdownCandles = filterCandlesByDays(candles, getRangeDays(drawdownRange));
-  const first = chartCandles[0];
-  const last = chartCandles.at(-1)!;
-  const previous = chartCandles.at(-2)!;
-  const change = last.close - previous.close;
-  const previousTop = calculatePreviousTop(drawdownCandles);
 
   return {
     symbol,
@@ -289,18 +340,7 @@ export function fallbackMarketData(symbolInput: string, range = "6mo", drawdownR
     type: classifySymbol(symbol),
     currency: "USD",
     exchange: "simulated",
-    price: last.close,
-    previousClose: previous.close,
-    change,
-    changePercent: (change / previous.close) * 100,
-    rangeChange: ((last.close - first.close) / first.close) * 100,
-    previousTop,
-    drawdownPercent: ((last.close - previousTop) / previousTop) * 100,
-    drawdownRange,
-    drawdownLabel: getDrawdownLabel(drawdownRange),
-    candles: chartCandles,
-    volume: chartVolume,
-    marketTime: last.time,
-    source: "offline demo data"
+    source: "offline demo data",
+    ...assemble(history, historyVolume, range, drawdownRange, includeOverlays)
   };
 }

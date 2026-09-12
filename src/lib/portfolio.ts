@@ -1,5 +1,6 @@
 import type { Holding, HoldingWithMarket, PortfolioSeed } from "@/types/portfolio";
 import type { MarketData } from "@/types/market";
+import { toMarketSignal } from "@/lib/analytics";
 
 export function createHolding(symbol: string, quantity: number, buyPrice: number): Holding {
   return {
@@ -27,7 +28,8 @@ export function enrichHolding(holding: Holding, market: MarketData): HoldingWith
     profitLossPercent,
     previousTop: market.previousTop,
     drawdownPercent: market.drawdownPercent,
-    currency: market.currency
+    currency: market.currency,
+    signal: toMarketSignal(market.analytics)
   };
 }
 
