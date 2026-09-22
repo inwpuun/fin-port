@@ -1,38 +1,35 @@
 import "server-only";
+import { query } from "@/lib/db/client";
 import { normalizeSymbol } from "@/lib/market";
-import { supabaseAdmin } from "@/lib/supabase/server";
 
 /**
  * Watchlist storage. Exported surface is unchanged from the CSV version; only
- * the backing store moved to Postgres, which also makes writes work on Vercel
- * (the serverless filesystem is read-only, so writeFile always failed there).
+ * the backing store moved to Postgres, which also removes the need for a
+ * writable filesystem (the CSV version rewrote public/my-watchlist.csv on
+ * every edit).
  */
 
 const fallbackWatchlistSymbols = ["AAPL", "MSFT", "NVDA", "VOO", "BTC-USD", "GC=F"];
 
 export async function getMyWatchlistSymbols(): Promise<string[]> {
-  let data;
+  let rows: Array<{ symbol: string }>;
 
   try {
-    const result = await supabaseAdmin()
-      .from("watchlist")
-      .select("symbol, sort_order")
-      .order("sort_order", { ascending: true });
-
-    if (result.error) throw new Error(result.error.message);
-    data = result.data;
+    rows = await query<{ symbol: string }>(
+      `select symbol from watchlist order by sort_order, symbol`
+    );
   } catch (error) {
     // Deliberately NOT falling back to the starter symbols here. Substituting
-    // a plausible list on a connection or credential failure made a broken
-    // deployment look healthy: the watchlist rendered six sensible tickers
-    // while holdings and allocations came back empty, which reads as "the
-    // holdings table is broken" instead of "the database is unreachable".
+    // a plausible list on a connection failure made a broken deployment look
+    // healthy: the watchlist rendered six sensible tickers while holdings and
+    // allocations came back empty, which reads as "the holdings table is
+    // broken" instead of "the database is unreachable".
     console.error("getMyWatchlistSymbols failed:", error);
     return [];
   }
 
   // Only a genuinely empty table gets the starter list.
-  const symbols = uniqueSymbols((data ?? []).map((row) => row.symbol as string));
+  const symbols = uniqueSymbols(rows.map((row) => row.symbol));
   return symbols.length ? symbols : fallbackWatchlistSymbols;
 }
 
@@ -40,21 +37,24 @@ export async function upsertMyWatchlistSymbol(symbol: string): Promise<string[]>
   const normalized = normalizeWatchlistSymbol(symbol);
   if (!normalized) throw new Error("Symbol is required");
 
-  // The CSV version prepended the new symbol. Reproduce that ordering by
-  // giving it a sort_order below every existing row.
-  const { data: head } = await supabaseAdmin()
-    .from("watchlist")
-    .select("sort_order")
-    .order("sort_order", { ascending: true })
-    .limit(1);
+  try {
+    // The CSV version prepended the new symbol. Reproduce that ordering by
+    // giving it a sort_order below every existing row -- computed inside the
+    // statement, so a concurrent insert cannot slot in between the read and
+    // the write.
+    await query(
+      `insert into watchlist (symbol, sort_order)
+            values ($1, coalesce((select min(sort_order) from watchlist), 0) - 1)
+       on conflict (symbol)
+       do update set sort_order = excluded.sort_order`,
+      [normalized]
+    );
+  } catch (error) {
+    throw new Error(
+      `Could not save ${normalized}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 
-  const lowest = Number(head?.[0]?.sort_order ?? 0);
-
-  const { error } = await supabaseAdmin()
-    .from("watchlist")
-    .upsert({ symbol: normalized, sort_order: lowest - 1 }, { onConflict: "symbol" });
-
-  if (error) throw new Error(`Could not save ${normalized}: ${error.message}`);
   return getMyWatchlistSymbols();
 }
 
@@ -64,14 +64,19 @@ export async function deleteMyWatchlistSymbol(symbol: string): Promise<string[]>
 
   // Stored symbols may predate normalization ("BRK.B" vs "BRK-B"), so resolve
   // the rows to delete the same way the CSV version compared them.
-  const { data } = await supabaseAdmin().from("watchlist").select("symbol");
-  const targets = (data ?? [])
-    .map((row) => row.symbol as string)
+  const rows = await query<{ symbol: string }>(`select symbol from watchlist`);
+  const targets = rows
+    .map((row) => row.symbol)
     .filter((item) => normalizeWatchlistSymbol(item) === normalized);
 
   if (targets.length) {
-    const { error } = await supabaseAdmin().from("watchlist").delete().in("symbol", targets);
-    if (error) throw new Error(`Could not delete ${normalized}: ${error.message}`);
+    try {
+      await query(`delete from watchlist where symbol = any($1::text[])`, [targets]);
+    } catch (error) {
+      throw new Error(
+        `Could not delete ${normalized}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   return getMyWatchlistSymbols();

@@ -1,5 +1,5 @@
 import "server-only";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { queryOne } from "@/lib/db/client";
 
 /**
  * When each table's rows last changed, for the "updated" label beside the logo.
@@ -25,16 +25,17 @@ export const emptyFreshness: Freshness = {
   cashBook: null
 };
 
+/**
+ * The table name is interpolated, not bound: Postgres has no parameter form
+ * for an identifier. Every call site below passes a literal, so nothing that
+ * reaches this function came from a request.
+ */
 async function latest(table: string): Promise<string | null> {
   try {
-    const { data, error } = await supabaseAdmin()
-      .from(table)
-      .select("updated_at")
-      .order("updated_at", { ascending: false })
-      .limit(1);
-
-    if (error) throw new Error(error.message);
-    return (data?.[0]?.updated_at as string | undefined) ?? null;
+    const row = await queryOne<{ updated_at: Date | null }>(
+      `select max(updated_at) as updated_at from ${table}`
+    );
+    return row?.updated_at ? row.updated_at.toISOString() : null;
   } catch (error) {
     // A missing timestamp just hides the label; it must never break the page.
     console.error(`freshness lookup failed for ${table}:`, error);

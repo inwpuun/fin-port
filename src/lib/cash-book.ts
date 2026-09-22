@@ -1,5 +1,6 @@
 import "server-only";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { query } from "@/lib/db/client";
+import { num } from "@/lib/db/sql";
 import type { CashBookTransaction } from "@/types/cash-book";
 
 /**
@@ -24,39 +25,33 @@ type TransactionRow = {
   occurred_on: string;
   occurred_at: string | null;
   memo: string | null;
-  amount: string | number;
+  amount: string;
   currency: string | null;
   tags: string | null;
-  running_balance: string | number | null;
+  running_balance: string | null;
   source_file: string | null;
   source_year: number | null;
 };
 
-/** PostgREST caps a default response; page through so no month goes missing. */
-const PAGE_SIZE = 1000;
-
 export async function getCashBookTransactions(): Promise<CashBookTransaction[]> {
-  const rows: TransactionRow[] = [];
+  let rows: TransactionRow[];
 
   try {
-    for (let page = 0; ; page += 1) {
-      const from = page * PAGE_SIZE;
-
-      const { data, error } = await supabaseAdmin()
-        .from("cash_transactions")
-        .select(
-          "id, account, transfer_account, description, category, subcategory, occurred_on, occurred_at, memo, amount, currency, tags, running_balance, source_file, source_year"
-        )
-        .order("occurred_on", { ascending: false })
-        .order("occurred_at", { ascending: false, nullsFirst: false })
-        .range(from, from + PAGE_SIZE - 1);
-
-      if (error) throw new Error(error.message);
-
-      const batch = (data ?? []) as TransactionRow[];
-      rows.push(...batch);
-      if (batch.length < PAGE_SIZE) break;
-    }
+    // One statement for the whole ledger. The PostgREST version had to page
+    // through in blocks of 1000 because the API caps a response; a direct
+    // connection has no such cap, and a few thousand rows is a single cheap
+    // sequential scan.
+    //
+    // occurred_on is cast to text: node-postgres turns a `date` into a JS Date
+    // at the server's local midnight, and formatting that back can land on the
+    // previous day. The column is a calendar date, so it stays a string.
+    rows = await query<TransactionRow>(
+      `select id, account, transfer_account, description, category, subcategory,
+              occurred_on::text as occurred_on, occurred_at::text as occurred_at,
+              memo, amount, currency, tags, running_balance, source_file, source_year
+         from cash_transactions
+        order by occurred_on desc, occurred_at desc nulls last`
+    );
   } catch (error) {
     // Same contract as the CSV version: an unreachable store reads as empty so
     // the dashboard renders instead of throwing. Log it, though -- a silent
@@ -109,12 +104,6 @@ function toCashBookTransaction(row: TransactionRow): CashBookTransaction {
     balance: num(row.running_balance),
     type: amount >= 0 ? "income" : "expense"
   };
-}
-
-function num(value: string | number | null | undefined) {
-  if (value == null) return null;
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /** Rebuilds the exporter's "Parent <sep> Child" string from the split columns. */

@@ -1,5 +1,5 @@
 /**
- * CSV -> Supabase importer.
+ * CSV -> Postgres importer.
  *
  *   npm run db:seed          # holdings, allocations, watchlist from data/*.csv
  *   npm run db:cash-book     # every data/cash-book/report-*.csv
@@ -7,46 +7,17 @@
  *   npx tsx scripts/import.ts cash-book path/to/other-export.csv
  *
  * Everything runs in upsert mode, so re-running is safe and never duplicates.
- * This talks to Supabase directly with the secret key and is meant to be run
- * from a trusted machine or CI -- never from a browser.
+ * This connects with DATABASE_URL and is meant to be run from a trusted
+ * machine or CI -- never from a browser.
  */
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { createClient } from "@supabase/supabase-js";
+import type { Client } from "pg";
 import { importCashBook } from "../src/lib/cash-book/import";
 import { importAllocations, importHoldings, importWatchlist } from "../src/lib/seed";
+import { connect, loadEnv, projectRoot } from "./db";
 
-const projectRoot = path.resolve(import.meta.dirname, "..");
 const dataDir = path.join(projectRoot, "data");
-
-function loadEnv() {
-  for (const file of [".env.local", ".env"]) {
-    try {
-      process.loadEnvFile(path.join(projectRoot, file));
-    } catch {
-      // Missing file is fine; the variable may come from the shell or CI.
-    }
-  }
-}
-
-function makeClient() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SECRET_KEY;
-
-  if (!url) throw new Error("SUPABASE_URL is not set (check .env.local).");
-  if (!key) {
-    throw new Error(
-      "SUPABASE_SECRET_KEY is not set. Create one in Supabase -> Project Settings -> API Keys -> Secret keys, then add it to .env.local. The publishable key cannot write: RLS denies it by design."
-    );
-  }
-  if (key.startsWith("sb_publishable_")) {
-    throw new Error("SUPABASE_SECRET_KEY holds a publishable key. Use the sb_secret_... key.");
-  }
-
-  return createClient(url.replace(/\/+$/, ""), key, {
-    auth: { persistSession: false, autoRefreshToken: false }
-  });
-}
 
 async function readIfPresent(file: string): Promise<string | null> {
   try {
@@ -56,7 +27,7 @@ async function readIfPresent(file: string): Promise<string | null> {
   }
 }
 
-async function seed(client: ReturnType<typeof makeClient>) {
+async function seed(client: Client) {
   const jobs: Array<[string, (csv: string) => Promise<{ table: string; rows: number }>]> = [
     ["my-port.csv", (csv) => importHoldings(client, csv)],
     ["my-allocation.csv", (csv) => importAllocations(client, csv)],
@@ -74,7 +45,7 @@ async function seed(client: ReturnType<typeof makeClient>) {
   }
 }
 
-async function cashBook(client: ReturnType<typeof makeClient>, explicit: string[]) {
+async function cashBook(client: Client, explicit: string[]) {
   let files = explicit;
 
   if (!files.length) {
@@ -121,15 +92,29 @@ async function main() {
   loadEnv();
 
   const [command = "all", ...rest] = process.argv.slice(2);
-  const client = makeClient();
-
-  console.log(`fin-port import: ${command}`);
-
-  if (command === "seed" || command === "all") await seed(client);
-  if (command === "cash-book" || command === "all") await cashBook(client, rest);
 
   if (!["seed", "cash-book", "all"].includes(command)) {
     throw new Error(`Unknown command "${command}". Use: seed | cash-book | all`);
+  }
+
+  console.log(`fin-port import: ${command}`);
+
+  const client = await connect();
+
+  try {
+    // One transaction per run. A CSV that fails validation halfway through
+    // should leave the tables as they were, not partly rewritten.
+    await client.query("begin");
+
+    if (command === "seed" || command === "all") await seed(client);
+    if (command === "cash-book" || command === "all") await cashBook(client, rest);
+
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    await client.end();
   }
 
   console.log("done.");

@@ -1,19 +1,61 @@
+# Two containers, one network: the dashboard and the Postgres it stores
+# everything in. Nothing here talks to a hosted database any more.
 services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-finport}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.local}
+      POSTGRES_DB: ${POSTGRES_DB:-finport}
+      # Deterministic collation, so ordering does not shift with the host locale.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Runs once, on a fresh volume, in filename order -- so `docker compose
+      # up` on a clean machine starts with the schema already in place. An
+      # existing volume ignores this directory entirely; that is what
+      # `npm run db:migrate` is for.
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    # Bound to loopback on purpose. The app reaches Postgres over the compose
+    # network and does not need this; it is published so that npm run dev,
+    # db:migrate and psql work from the host. Drop the line to close it.
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      # Postgres starts, runs the init scripts, then restarts. Without a
+      # healthcheck the app would connect during that first pass and fail.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-finport} -d ${POSTGRES_DB:-finport}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
   fin-port:
     build:
       context: .
     image: fin-port:local
     restart: unless-stopped
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
-    # Reads SUPABASE_* and ADMIN_TOKEN from .env.local. Keys stay in the
-    # container environment; none is baked into the image (see .dockerignore).
+    depends_on:
+      db:
+        condition: service_healthy
+    # Reads ADMIN_TOKEN, BOT_API_KEY and the POSTGRES_* values from .env.local.
+    # Nothing is baked into the image (see .dockerignore).
     env_file:
-      - .env.local
+      - .env
     environment:
       NODE_ENV: production
       PORT: "3000"
+      # Overrides whatever DATABASE_URL .env.local sets: that one points at
+      # 127.0.0.1 for `npm run dev` on the host, and inside the network the
+      # database answers to `db` instead.
+      DATABASE_URL: postgres://${POSTGRES_USER:-finport}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-finport}
     ports:
       - "3000:3000"
-    # No bind mount for ./public any more. Portfolio and watchlist edits go to
-    # Postgres, so they no longer need to be written back to CSV files -- which
-    # is also why this app can now run on Vercel's read-only filesystem.
+    # No bind mount for ./public. Portfolio and watchlist edits go to Postgres,
+    # so they no longer have to be written back to CSV files -- which is also
+    # why this image can run with a read-only filesystem.
+
+volumes:
+  pgdata:

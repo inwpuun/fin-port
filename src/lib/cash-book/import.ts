@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { buildUpsert, chunk, type Db } from "@/lib/db/sql";
 import { parseCashBookCsv, type CashAccountInput, type CashTransactionInput } from "./parse";
 
 export type SourceFile = { name: string; content: string };
@@ -18,17 +18,34 @@ export type ImportReport = {
   durationMs: number;
 };
 
+const TRANSACTION_COLUMNS = [
+  "id",
+  "fingerprint",
+  "occurrence",
+  "account",
+  "transfer_account",
+  "description",
+  "category",
+  "subcategory",
+  "occurred_on",
+  "occurred_at",
+  "memo",
+  "amount",
+  "currency",
+  "check_no",
+  "tags",
+  "running_balance",
+  "source_file",
+  "source_year"
+] as const;
+
+const ACCOUNT_COLUMNS = ["name", "currency", "current_balance", "balance_year"] as const;
+
 /**
- * Postgres has a parameter ceiling per statement, and cash_transactions is 19
+ * Postgres caps a statement at 65535 parameters and cash_transactions is 18
  * columns wide, so batch the upsert rather than sending 3k rows at once.
  */
 const BATCH_SIZE = 500;
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
-  return out;
-}
 
 /**
  * Imports one or more cash-book CSV exports in upsert mode.
@@ -38,11 +55,11 @@ function chunk<T>(items: T[], size: number): T[][] {
  * same values, edited rows update in place, and only genuinely new rows are
  * inserted. Nothing is ever deleted, so re-importing a partial export cannot
  * lose history.
+ *
+ * The caller decides whether this runs in a transaction: the app wraps it in
+ * one (a half-applied ledger is worse than none), the CLI does not need to.
  */
-export async function importCashBook(
-  client: SupabaseClient,
-  sources: SourceFile[]
-): Promise<ImportReport> {
+export async function importCashBook(client: Db, sources: SourceFile[]): Promise<ImportReport> {
   const startedAt = Date.now();
 
   const report: ImportReport = {
@@ -83,21 +100,37 @@ export async function importCashBook(
 
   const accountRows = [...accounts.values()];
   if (accountRows.length) {
-    const { error } = await client
-      .from("cash_accounts")
-      .upsert(accountRows, { onConflict: "name" });
-    if (error) throw new Error(`cash_accounts upsert failed: ${error.message}`);
+    const { text, values } = buildUpsert("cash_accounts", [...ACCOUNT_COLUMNS], accountRows, {
+      conflict: ["name"]
+    });
+
+    try {
+      await client.query(text, values);
+    } catch (error) {
+      throw new Error(`cash_accounts upsert failed: ${message(error)}`);
+    }
+
     report.accountsUpserted = accountRows.length;
   }
 
   for (const batch of chunk([...transactions.values()], BATCH_SIZE)) {
-    const { error } = await client
-      .from("cash_transactions")
-      .upsert(batch, { onConflict: "id" });
-    if (error) throw new Error(`cash_transactions upsert failed: ${error.message}`);
+    const { text, values } = buildUpsert("cash_transactions", [...TRANSACTION_COLUMNS], batch, {
+      conflict: ["id"]
+    });
+
+    try {
+      await client.query(text, values);
+    } catch (error) {
+      throw new Error(`cash_transactions upsert failed: ${message(error)}`);
+    }
+
     report.transactionsUpserted += batch.length;
   }
 
   report.durationMs = Date.now() - startedAt;
   return report;
+}
+
+function message(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }

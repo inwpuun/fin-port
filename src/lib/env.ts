@@ -2,45 +2,45 @@ import "server-only";
 import { MIN_TOKEN_LENGTH } from "@/lib/session";
 
 /**
- * Every Supabase credential is read through here, and this module is
- * `server-only`: importing it from a Client Component is a build error.
+ * Every credential is read through here, and this module is `server-only`:
+ * importing it from a Client Component is a build error.
  *
  * Nothing is named NEXT_PUBLIC_* on purpose. Next.js inlines NEXT_PUBLIC_
- * variables into the browser bundle, so a key with that prefix is published
- * to every visitor of the deployment. Ours stay on the server.
+ * variables into the browser bundle, so a variable with that prefix is
+ * published to every visitor of the deployment. Ours stay on the server --
+ * and DATABASE_URL contains a password, so that matters more than ever.
  */
 
 function required(name: string): string {
   const value = process.env[name];
   if (!value) {
     throw new Error(
-      `Missing required environment variable ${name}. Copy .env.example to .env.local for local dev, or add it in Vercel -> Settings -> Environment Variables.`
+      `Missing required environment variable ${name}. Copy .env.example to .env.local for local dev; under Docker Compose it is set for you from POSTGRES_*.`
     );
   }
   return value;
 }
 
-export function supabaseUrl(): string {
-  return required("SUPABASE_URL").replace(/\/+$/, "");
-}
+/**
+ * Connection string for the Postgres that ships in docker-compose.yml.
+ *
+ * Under Compose the host is the `db` service; running `npm run dev` on the
+ * host it is 127.0.0.1 against the published port. Same database either way.
+ */
+export function databaseUrl(): string {
+  const url = required("DATABASE_URL").trim();
 
-export function supabasePublishableKey(): string {
-  return required("SUPABASE_PUBLISHABLE_KEY");
-}
-
-/** Bypasses RLS. Only ever used inside server code paths that write. */
-export function supabaseSecretKey(): string {
-  const key = required("SUPABASE_SECRET_KEY");
-  if (key.startsWith("sb_publishable_")) {
+  if (!/^postgres(ql)?:\/\//i.test(url)) {
     throw new Error(
-      "SUPABASE_SECRET_KEY holds a publishable key. Generate a secret key in Supabase -> Project Settings -> API Keys -> Secret keys."
+      `DATABASE_URL must be a postgres:// connection string, e.g. postgres://finport:<password>@localhost:5432/finport`
     );
   }
-  return key;
+
+  return url;
 }
 
-export function hasSecretKey(): boolean {
-  return Boolean(process.env.SUPABASE_SECRET_KEY);
+export function hasDatabaseUrl(): boolean {
+  return Boolean(process.env.DATABASE_URL);
 }
 
 export function adminToken(): string {

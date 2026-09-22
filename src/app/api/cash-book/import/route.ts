@@ -1,13 +1,13 @@
 import { NextRequest } from "next/server";
 import { isAuthorized, unauthorized } from "@/lib/auth";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { withTransaction } from "@/lib/db/client";
 import { importCashBook, type SourceFile } from "@/lib/cash-book/import";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/** Vercel caps a serverless request body at ~4.5 MB; refuse early and clearly. */
+/** Keep one request well clear of the body limits proxies impose; refuse early and clearly. */
 const MAX_BYTES = 4 * 1024 * 1024;
 
 async function readSources(request: NextRequest): Promise<SourceFile[]> {
@@ -58,7 +58,9 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "No CSV content received" }, { status: 400 });
     }
 
-    const report = await importCashBook(supabaseAdmin(), sources);
+    // One transaction for the whole import: a failure partway through leaves
+    // the ledger exactly as it was, rather than with some files applied.
+    const report = await withTransaction((client) => importCashBook(client, sources));
     return Response.json({ ok: true, report });
   } catch (error) {
     return Response.json(

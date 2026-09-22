@@ -1,11 +1,17 @@
 -- ===========================================================================
 -- fin-port schema
 --
--- Security model: this is a private, single-user app. No browser ever holds a
--- Supabase key; every query runs from the Next.js server. RLS is therefore
--- enabled with NO policies at all, which denies `anon` and `authenticated`
--- everything. The server reaches the data with the secret key, which bypasses
--- RLS. If the publishable key ever leaks it grants exactly nothing.
+-- Security model: this is a private, single-user app running its own Postgres
+-- beside the web container. Nothing but the Next.js server ever opens a
+-- connection: the database port is published only on 127.0.0.1, the app owns
+-- the one role, and no browser holds a credential of any kind. There is no
+-- second, lower-privilege client to defend against, so this schema grants no
+-- privileges to anyone else and defines no row-level policies -- the network
+-- boundary is the boundary.
+--
+-- Idempotent on purpose: it runs from /docker-entrypoint-initdb.d on a fresh
+-- volume AND from `npm run db:migrate` against an existing database, so it
+-- must survive being applied twice.
 -- ===========================================================================
 
 create extension if not exists pgcrypto;
@@ -16,7 +22,6 @@ create extension if not exists pgcrypto;
 create or replace function public.touch_updated_at()
 returns trigger
 language plpgsql
-security definer
 set search_path = ''
 as $$
 begin
@@ -26,7 +31,7 @@ end;
 $$;
 
 -- --------------------------------------------------------------------------
--- holdings  <- data/my-port.csv
+-- holdings  <- data/my-port.csv (import format only; this table is the store)
 -- cost_basis is the TOTAL amount paid for the position, not a unit price.
 -- --------------------------------------------------------------------------
 create table if not exists public.holdings (
@@ -198,22 +203,6 @@ as $$
 $$;
 
 -- --------------------------------------------------------------------------
--- Lock everything down. RLS on, zero policies => anon/authenticated get
--- nothing. Only the secret key (which bypasses RLS) can read or write.
--- --------------------------------------------------------------------------
-alter table public.holdings          enable row level security;
-alter table public.allocations       enable row level security;
-alter table public.watchlist         enable row level security;
-alter table public.cash_accounts     enable row level security;
-alter table public.cash_transactions enable row level security;
-
-revoke all on public.holdings, public.allocations, public.watchlist,
-              public.cash_accounts, public.cash_transactions
-  from anon, authenticated;
-
-revoke execute on function public.cash_monthly_summary(integer, boolean) from anon, authenticated;
-
--- --------------------------------------------------------------------------
 -- Category rollup. Doubles as the category filter list for the UI, so the
 -- page never has to pull every row just to learn the distinct categories.
 -- --------------------------------------------------------------------------
@@ -259,6 +248,3 @@ as $$
   group by 1
   order by 1 desc;
 $$;
-
-revoke execute on function public.cash_category_totals(integer, boolean) from anon, authenticated;
-revoke execute on function public.cash_years() from anon, authenticated;

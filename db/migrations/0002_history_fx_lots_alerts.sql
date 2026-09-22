@@ -1,9 +1,9 @@
 -- ===========================================================================
 -- fin-port schema, part 2: history, exchange rates, trade log, alerts
 --
--- Same security model as 0001: RLS enabled with NO policies, privileges
--- revoked, and only the secret key (which bypasses RLS) can read or write.
--- Idempotent, so re-running is safe.
+-- Same security model as 0001: one role, reachable only from the app
+-- container, so no policies or grants here either. Idempotent, so re-running
+-- is safe.
 -- ===========================================================================
 
 -- --------------------------------------------------------------------------
@@ -42,8 +42,8 @@ create index if not exists fx_rates_pair_as_of_idx
 -- --------------------------------------------------------------------------
 -- portfolio_snapshots
 --
--- One row per calendar day (Asia/Bangkok), written by POST /api/snapshot --
--- run from Vercel Cron, see vercel.json. Nothing else in this app records
+-- One row per calendar day (Asia/Bangkok), written by POST /api/snapshot on
+-- a schedule. Nothing else in this app records
 -- what the portfolio was worth yesterday, so without this table an equity
 -- curve, a portfolio-level drawdown or a "since January" number cannot be
 -- drawn at all: only per-symbol price history was ever available.
@@ -174,20 +174,6 @@ create index if not exists alert_events_fired_idx
   on public.alert_events (fired_at desc);
 
 -- --------------------------------------------------------------------------
--- Lock everything down, exactly as 0001 does.
--- --------------------------------------------------------------------------
-alter table public.fx_rates             enable row level security;
-alter table public.portfolio_snapshots  enable row level security;
-alter table public.holding_transactions enable row level security;
-alter table public.alert_rules          enable row level security;
-alter table public.alert_events         enable row level security;
-
-revoke all on public.fx_rates, public.portfolio_snapshots,
-              public.holding_transactions, public.alert_rules,
-              public.alert_events
-  from anon, authenticated;
-
--- --------------------------------------------------------------------------
 -- Latest rate per pair, so a conversion is one round trip instead of one
 -- query per currency.
 -- --------------------------------------------------------------------------
@@ -209,5 +195,3 @@ as $$
   where r.base = p_base
   order by r.quote, r.as_of desc;
 $$;
-
-revoke execute on function public.fx_latest_rates(text) from anon, authenticated;

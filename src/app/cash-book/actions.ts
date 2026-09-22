@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { adminToken } from "@/lib/env";
 import { SESSION_COOKIE, verifySessionCookie } from "@/lib/session";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { withTransaction } from "@/lib/db/client";
 import { importCashBook, type SourceFile } from "@/lib/cash-book/import";
 
 async function assertUnlocked() {
@@ -50,7 +50,7 @@ export async function importCashBookAction(
       uploads.map(async (file) => ({ name: file.name, content: await file.text() }))
     );
 
-    const report = await importCashBook(supabaseAdmin(), sources);
+    const report = await withTransaction((client) => importCashBook(client, sources));
     revalidatePath("/cash-book");
 
     return {

@@ -1,6 +1,7 @@
 import "server-only";
+import { query, withTransaction } from "@/lib/db/client";
+import { num } from "@/lib/db/sql";
 import { normalizeSymbol } from "@/lib/market";
-import { supabaseAdmin } from "@/lib/supabase/server";
 import type { AllocationRule, PortfolioSeed } from "@/types/portfolio";
 
 /**
@@ -8,10 +9,9 @@ import type { AllocationRule, PortfolioSeed } from "@/types/portfolio";
  * so every page and route handler above it keeps working -- only the backing
  * store moved to Postgres.
  *
- * The CSV version wrote back to public/my-port.csv, which cannot work on
- * Vercel: the serverless filesystem is read-only, so every upsert and delete
- * would have failed in production. Docker Compose papered over it locally by
- * bind-mounting ./public. Postgres removes the constraint entirely.
+ * The CSV version wrote back to public/my-port.csv, which needs a writable
+ * filesystem that not every host provides, and made two containers sharing
+ * one portfolio impossible. Postgres removes both constraints.
  */
 
 type PortfolioHoldingValueInput = {
@@ -23,39 +23,37 @@ type PortfolioHoldingValueInput = {
 
 type HoldingRow = {
   symbol: string;
-  quantity: string | number;
-  cost_basis: string | number;
+  quantity: string;
+  cost_basis: string;
   cost_currency: string | null;
 };
 
-/** Postgres numerics arrive as strings over PostgREST. */
-function num(value: string | number | null | undefined) {
-  if (value == null) return 0;
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
+type AllocationRow = {
+  category: string;
+  symbol: string;
+  cash_value: string | null;
+  cash_currency: string | null;
+};
 
 function rowToSeed(row: HoldingRow): PortfolioSeed {
   const symbol = row.symbol.trim().toUpperCase();
   return {
     id: createPortfolioSeedId(symbol),
     symbol,
-    quantity: num(row.quantity),
-    costBasis: num(row.cost_basis),
+    quantity: num(row.quantity) ?? 0,
+    costBasis: num(row.cost_basis) ?? 0,
     costCurrency: (row.cost_currency || "USD").toUpperCase()
   };
 }
 
 export async function getMyPortfolioSeed(): Promise<PortfolioSeed[]> {
   try {
-    const { data, error } = await supabaseAdmin()
-      .from("holdings")
-      .select("symbol, quantity, cost_basis, cost_currency")
-      .order("sort_order", { ascending: true })
-      .order("symbol", { ascending: true });
-
-    if (error) throw new Error(error.message);
-    return (data ?? []).map((row) => rowToSeed(row as HoldingRow));
+    const rows = await query<HoldingRow>(
+      `select symbol, quantity, cost_basis, cost_currency
+         from holdings
+        order by sort_order, symbol`
+    );
+    return rows.map(rowToSeed);
   } catch (error) {
     // Same contract as the CSV version: an unreachable store reads as empty so
     // the dashboard renders instead of throwing a 500. Log it, though -- a
@@ -67,23 +65,20 @@ export async function getMyPortfolioSeed(): Promise<PortfolioSeed[]> {
 
 export async function getMyAllocationRules(): Promise<AllocationRule[]> {
   try {
-    const { data, error } = await supabaseAdmin()
-      .from("allocations")
-      .select("category, symbol, cash_value, cash_currency")
-      .order("sort_order", { ascending: true })
-      .order("category", { ascending: true })
-      .order("symbol", { ascending: true });
+    const rows = await query<AllocationRow>(
+      `select category, symbol, cash_value, cash_currency
+         from allocations
+        order by sort_order, category, symbol`
+    );
 
-    if (error) throw new Error(error.message);
-
-    return (data ?? []).map((row) => {
-      const cashValue = row.cash_value == null ? undefined : num(row.cash_value as string);
-      const cashCurrency = (row.cash_currency as string | null) || undefined;
+    return rows.map((row) => {
+      const cashValue = num(row.cash_value);
+      const cashCurrency = row.cash_currency || undefined;
 
       return {
-        category: row.category as string,
-        symbol: (row.symbol as string).toUpperCase(),
-        ...(cashValue === undefined ? {} : { cashValue }),
+        category: row.category,
+        symbol: row.symbol.toUpperCase(),
+        ...(cashValue === null ? {} : { cashValue }),
         ...(cashCurrency ? { cashCurrency: cashCurrency.toUpperCase() } : {})
       };
     });
@@ -106,6 +101,8 @@ export type AllocationRuleInput = {
  * A symbol belongs to exactly one lane, but the table is keyed on
  * (category, symbol) -- so a move has to clear the symbol's other rows first,
  * or it would be counted in two categories at once and inflate the total.
+ * Both statements run in one transaction: a failure between them would leave
+ * the symbol in no lane at all.
  */
 export async function upsertMyAllocationRule(rule: AllocationRuleInput): Promise<AllocationRule[]> {
   const symbol = rule.symbol.trim().toUpperCase();
@@ -114,29 +111,29 @@ export async function upsertMyAllocationRule(rule: AllocationRuleInput): Promise
   if (!symbol) throw new Error("Symbol is required");
   if (!category) throw new Error("Category is required");
 
-  const client = supabaseAdmin();
-
-  const { error: clearError } = await client
-    .from("allocations")
-    .delete()
-    .eq("symbol", symbol)
-    .neq("category", category);
-  if (clearError) throw new Error(`Could not move ${symbol}: ${clearError.message}`);
-
   const cashValue = Number.isFinite(Number(rule.cashValue)) ? Number(rule.cashValue) : null;
   const cashCurrency = (rule.cashCurrency || "").trim().toUpperCase() || null;
 
-  const { error } = await client.from("allocations").upsert(
-    {
-      category,
-      symbol,
-      cash_value: cashValue,
-      cash_currency: cashCurrency
-    },
-    { onConflict: "category,symbol" }
-  );
+  try {
+    await withTransaction(async (client) => {
+      await client.query(`delete from allocations where symbol = $1 and category <> $2`, [
+        symbol,
+        category
+      ]);
 
-  if (error) throw new Error(`Could not save ${symbol} allocation: ${error.message}`);
+      await client.query(
+        `insert into allocations (category, symbol, cash_value, cash_currency)
+              values ($1, $2, $3, $4)
+         on conflict (category, symbol)
+         do update set cash_value = excluded.cash_value,
+                       cash_currency = excluded.cash_currency`,
+        [category, symbol, cashValue, cashCurrency]
+      );
+    });
+  } catch (error) {
+    throw new Error(`Could not save ${symbol} allocation: ${message(error)}`);
+  }
+
   return getMyAllocationRules();
 }
 
@@ -145,8 +142,11 @@ export async function deleteMyAllocationRule(symbol: string): Promise<Allocation
   const clean = symbol.trim().toUpperCase();
   if (!clean) throw new Error("Symbol is required");
 
-  const { error } = await supabaseAdmin().from("allocations").delete().eq("symbol", clean);
-  if (error) throw new Error(`Could not delete ${clean} allocation: ${error.message}`);
+  try {
+    await query(`delete from allocations where symbol = $1`, [clean]);
+  } catch (error) {
+    throw new Error(`Could not delete ${clean} allocation: ${message(error)}`);
+  }
 
   return getMyAllocationRules();
 }
@@ -208,17 +208,20 @@ export function createPortfolioSeedFromQuantity({
 export async function upsertMyPortfolioSeed(seed: PortfolioSeed): Promise<PortfolioSeed[]> {
   const normalized = normalizeSeed(seed);
 
-  const { error } = await supabaseAdmin().from("holdings").upsert(
-    {
-      symbol: normalized.symbol,
-      quantity: normalized.quantity,
-      cost_basis: normalized.costBasis,
-      cost_currency: normalized.costCurrency || "USD"
-    },
-    { onConflict: "symbol" }
-  );
+  try {
+    await query(
+      `insert into holdings (symbol, quantity, cost_basis, cost_currency)
+            values ($1, $2, $3, $4)
+       on conflict (symbol)
+       do update set quantity = excluded.quantity,
+                     cost_basis = excluded.cost_basis,
+                     cost_currency = excluded.cost_currency`,
+      [normalized.symbol, normalized.quantity, normalized.costBasis, normalized.costCurrency || "USD"]
+    );
+  } catch (error) {
+    throw new Error(`Could not save ${normalized.symbol}: ${message(error)}`);
+  }
 
-  if (error) throw new Error(`Could not save ${normalized.symbol}: ${error.message}`);
   return getMyPortfolioSeed();
 }
 
@@ -234,11 +237,18 @@ export async function deleteMyPortfolioSeed(stock: string): Promise<PortfolioSee
     .map((item) => item.symbol);
 
   if (targets.length) {
-    const { error } = await supabaseAdmin().from("holdings").delete().in("symbol", targets);
-    if (error) throw new Error(`Could not delete ${symbol}: ${error.message}`);
+    try {
+      await query(`delete from holdings where symbol = any($1::text[])`, [targets]);
+    } catch (error) {
+      throw new Error(`Could not delete ${symbol}: ${message(error)}`);
+    }
   }
 
   return getMyPortfolioSeed();
+}
+
+function message(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Validates and rounds a seed to the precision the holdings table stores. */
@@ -274,4 +284,3 @@ function roundTo(value: number, decimalPlaces: number) {
   const factor = 10 ** decimalPlaces;
   return Math.round((value + Number.EPSILON) * factor) / factor;
 }
-

@@ -1,16 +1,19 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseAmount, parseCsvRecords } from "@/lib/csv";
+import { buildUpsert, type Db } from "@/lib/db/sql";
 
 /**
  * One-shot importers that move the original CSVs into Postgres. Same upsert
  * discipline as the cash book: the natural key of each sheet is its unique
  * constraint, so re-running is idempotent.
+ *
+ * Takes the connection as an argument rather than reaching for the app pool,
+ * so scripts/import.ts can run these under tsx with its own one-shot client.
  */
 
 export type SeedCount = { table: string; rows: number };
 
 /** data/my-port.csv -> holdings. "cost basis" is the position total, not a unit price. */
-export async function importHoldings(client: SupabaseClient, csv: string): Promise<SeedCount> {
+export async function importHoldings(client: Db, csv: string): Promise<SeedCount> {
   const rows = parseCsvRecords(csv)
     .map((record, index) => ({
       symbol: (record.stock || record.symbol || "").toUpperCase(),
@@ -23,13 +26,24 @@ export async function importHoldings(client: SupabaseClient, csv: string): Promi
 
   if (!rows.length) return { table: "holdings", rows: 0 };
 
-  const { error } = await client.from("holdings").upsert(rows, { onConflict: "symbol" });
-  if (error) throw new Error(`holdings upsert failed: ${error.message}`);
+  const { text, values } = buildUpsert(
+    "holdings",
+    ["symbol", "quantity", "cost_basis", "cost_currency", "sort_order"],
+    rows,
+    { conflict: ["symbol"] }
+  );
+
+  try {
+    await client.query(text, values);
+  } catch (error) {
+    throw new Error(`holdings upsert failed: ${message(error)}`);
+  }
+
   return { table: "holdings", rows: rows.length };
 }
 
 /** data/my-allocation.csv -> allocations. */
-export async function importAllocations(client: SupabaseClient, csv: string): Promise<SeedCount> {
+export async function importAllocations(client: Db, csv: string): Promise<SeedCount> {
   const rows = parseCsvRecords(csv)
     .map((record, index) => ({
       category: record.category || "",
@@ -42,15 +56,24 @@ export async function importAllocations(client: SupabaseClient, csv: string): Pr
 
   if (!rows.length) return { table: "allocations", rows: 0 };
 
-  const { error } = await client
-    .from("allocations")
-    .upsert(rows, { onConflict: "category,symbol" });
-  if (error) throw new Error(`allocations upsert failed: ${error.message}`);
+  const { text, values } = buildUpsert(
+    "allocations",
+    ["category", "symbol", "cash_value", "cash_currency", "sort_order"],
+    rows,
+    { conflict: ["category", "symbol"] }
+  );
+
+  try {
+    await client.query(text, values);
+  } catch (error) {
+    throw new Error(`allocations upsert failed: ${message(error)}`);
+  }
+
   return { table: "allocations", rows: rows.length };
 }
 
 /** data/my-watchlist.csv -> watchlist. */
-export async function importWatchlist(client: SupabaseClient, csv: string): Promise<SeedCount> {
+export async function importWatchlist(client: Db, csv: string): Promise<SeedCount> {
   const rows = parseCsvRecords(csv)
     .map((record, index) => ({
       symbol: (record.symbol || "").toUpperCase(),
@@ -60,7 +83,19 @@ export async function importWatchlist(client: SupabaseClient, csv: string): Prom
 
   if (!rows.length) return { table: "watchlist", rows: 0 };
 
-  const { error } = await client.from("watchlist").upsert(rows, { onConflict: "symbol" });
-  if (error) throw new Error(`watchlist upsert failed: ${error.message}`);
+  const { text, values } = buildUpsert("watchlist", ["symbol", "sort_order"], rows, {
+    conflict: ["symbol"]
+  });
+
+  try {
+    await client.query(text, values);
+  } catch (error) {
+    throw new Error(`watchlist upsert failed: ${message(error)}`);
+  }
+
   return { table: "watchlist", rows: rows.length };
+}
+
+function message(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
