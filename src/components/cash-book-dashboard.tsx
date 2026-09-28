@@ -1,13 +1,14 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
+import { CashBookCalendar } from "@/components/cash-book-calendar";
 import { currencyFormat } from "@/lib/format";
 import type { CashBookFlowType, CashBookTransaction } from "@/types/cash-book";
 
 type YearFilter = number | "all";
 type ChartPeriod = "day" | "month" | "year";
 type DescriptionFilter = CashBookFlowType | "all";
-type CashBookSubpage = "overview" | "categories" | "graph" | "descriptions";
+type CashBookSubpage = "overview" | "calendar" | "categories" | "graph" | "descriptions";
 type SortDirection = "asc" | "desc";
 type DescriptionSortField = "description" | "category" | "income" | "expense" | "net" | "count" | "latest";
 
@@ -88,6 +89,7 @@ const descriptionFilters: Array<{ value: DescriptionFilter; label: string }> = [
 ];
 const cashBookSubpages: Array<{ value: CashBookSubpage; label: string }> = [
   { value: "overview", label: "Overview" },
+  { value: "calendar", label: "Calendar" },
   { value: "categories", label: "Categories" },
   { value: "graph", label: "Graph" },
   { value: "descriptions", label: "Descriptions" }
@@ -310,6 +312,10 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
             />
           </section>
         </>
+      )}
+
+      {activeSubpage === "calendar" && (
+        <CashBookCalendar transactions={filteredTransactions} year={selectedYear} onOpen={openTransactionModal} />
       )}
 
       {activeSubpage === "categories" && (

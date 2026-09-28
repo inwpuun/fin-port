@@ -88,3 +88,45 @@ button {
   border: 1px solid rgba(255, 255, 255, 0.09);
   background: rgba(255, 255, 255, 0.04);
 }
+
+/* FullCalendar classic theme, re-tokened to the dashboard's dark glass palette. */
+.cash-calendar {
+  --fc-classic-button: rgba(255, 255, 255, 0.05);
+  --fc-classic-button-border: rgba(255, 255, 255, 0.1);
+  --fc-classic-button-strong: rgba(82, 214, 255, 0.15);
+  --fc-classic-button-strong-border: rgba(82, 214, 255, 0.4);
+  --fc-classic-button-outline: rgba(82, 214, 255, 0.4);
+  --fc-classic-button-foreground: #cbd5e1;
+  --fc-classic-primary: #52d6ff;
+  --fc-classic-primary-foreground: #06080c;
+  --fc-classic-event: rgba(82, 214, 255, 0.15);
+  --fc-classic-event-contrast: #52d6ff;
+  --fc-classic-background-event: #52d6ff;
+  --fc-classic-background-event-opacity: 12%;
+  --fc-classic-background-event-foreground-opacity: 60%;
+  --fc-classic-highlight: rgba(82, 214, 255, 0.08);
+  --fc-classic-today: rgba(82, 214, 255, 0.07);
+  --fc-classic-now: #ff5278;
+  --fc-classic-ring-color: rgba(82, 214, 255, 0.55);
+  --fc-classic-small-dot-width: 8px;
+  --fc-classic-large-dot-width: 10px;
+  --fc-classic-background: transparent;
+  --fc-classic-faint: rgba(255, 255, 255, 0.02);
+  --fc-classic-muted: rgba(255, 255, 255, 0.05);
+  --fc-classic-strong: rgba(255, 255, 255, 0.1);
+  --fc-classic-foreground: #edf5ff;
+  --fc-classic-faint-foreground: #475569;
+  --fc-classic-muted-foreground: #94a3b8;
+  --fc-classic-border: rgba(255, 255, 255, 0.1);
+  --fc-classic-strong-border: rgba(255, 255, 255, 0.18);
+  --fc-popover-z: 40;
+}
+
+.cash-calendar .cash-day-active {
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+.cash-calendar .cash-day-active:hover {
+  background-color: rgba(82, 214, 255, 0.08);
+}
