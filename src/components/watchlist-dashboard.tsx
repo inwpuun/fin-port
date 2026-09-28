@@ -5,6 +5,7 @@ import { drawdownRanges, fallbackMarketData, normalizeSymbol } from "@/lib/marke
 import { toMarketSignal } from "@/lib/analytics";
 import { currencyFormat, percentFormat } from "@/lib/format";
 import type { DrawdownRange, MarketData } from "@/types/market";
+import { CardStat, MobileSortBar } from "./mobile-sort";
 import { SymbolChartModal } from "./symbol-chart-modal";
 import { SignalCell } from "./market-analysis";
 
@@ -241,19 +242,19 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
   }
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       <section className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
-        <article className="glass-panel overflow-hidden rounded-3xl p-6">
+        <article className="glass-panel overflow-hidden rounded-3xl p-4 sm:p-6">
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">My Watchlist</p>
-          <h1 className="max-w-4xl font-serif text-5xl leading-none md:text-7xl">Price radar without position sizing.</h1>
-          <div className="mt-8 grid gap-3 md:grid-cols-3">
+          <h1 className="max-w-4xl font-serif text-4xl leading-none sm:text-5xl md:text-7xl">Price radar without position sizing.</h1>
+          <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-8 sm:gap-3 sm:[grid-template-columns:repeat(auto-fit,minmax(200px,1fr))] [&>:last-child:nth-child(odd)]:col-span-2 sm:[&>:last-child:nth-child(odd)]:col-span-1">
             <Summary title="Symbols" value={String(rows.length)} />
             <Summary title="Green Today" value={`${summary.positive}/${rows.length || 0}`} tone="text-mint-signal" />
             <Summary title="Avg Drawdown" value={percentFormat(summary.averageDrawdown)} tone="text-amber-signal" />
           </div>
         </article>
 
-        <section className="glass-panel rounded-3xl p-6">
+        <section className="glass-panel rounded-3xl p-4 sm:p-6">
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Drawdown Detector</p>
           <h2 className="mb-4 text-2xl font-black">Watchlist top % alert</h2>
           <label className="field-shell mb-4 grid gap-1 rounded-2xl px-4 py-3">
@@ -288,7 +289,7 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[390px_1fr]">
-        <section className="glass-panel rounded-3xl p-6">
+        <section className="glass-panel rounded-3xl p-4 sm:p-6">
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Watchlist Input</p>
           <h2 className="mb-4 text-2xl font-black">Add symbol</h2>
           <form onSubmit={addSymbol} className="grid gap-3">
@@ -318,12 +319,57 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
           {fxError && <p className="mt-3 text-sm text-rose-signal">{fxError}</p>}
         </section>
 
-        <section className="glass-panel overflow-hidden rounded-3xl">
-          <div className="border-b border-white/10 p-6">
+        <section className="glass-panel overflow-hidden rounded-3xl max-xl:order-first">
+          <div className="border-b border-white/10 p-4 sm:p-6">
             <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Symbols</p>
             <h2 className="text-2xl font-black">Watchlist table</h2>
           </div>
-          <div className="overflow-x-auto">
+          <MobileSortBar columns={sortableColumns} sort={sort} onSort={changeSort} onReset={() => setSort(null)} />
+          <ul className="divide-y divide-white/10 md:hidden">
+            {sortedRows.map((row) => {
+              const removing = isPendingSymbol(removingSymbol, row.requestSymbol);
+
+              return (
+                <li key={row.requestSymbol} className="grid gap-3 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <button type="button" onClick={() => openSymbolChart(row)} className="min-w-0 text-left">
+                      <strong className="block font-black text-white">{row.symbol}</strong>
+                      <small className="block truncate text-slate-400">{row.name}</small>
+                    </button>
+                    <div className="shrink-0 text-right">
+                      <strong className="block font-black">{formatMoney(row.price, row.currency)}</strong>
+                      <small className={`block font-black ${row.changePercent >= 0 ? "text-mint-signal" : "text-rose-signal"}`}>
+                        {formatMoney(row.change, row.currency)} {percentFormat(row.changePercent)}
+                      </small>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <CardStat label="1Y Move" value={percentFormat(row.rangeChange)} tone={row.rangeChange >= 0 ? "text-mint-signal" : "text-rose-signal"} />
+                    <CardStat
+                      label="From Top"
+                      value={percentFormat(row.drawdownPercent)}
+                      tone={Math.abs(row.drawdownPercent) >= Number(drawdownLimit || 0) ? "text-amber-signal" : "text-slate-300"}
+                    />
+                    <CardStat label="Top" value={formatMoney(row.previousTop, row.currency)} />
+                  </div>
+                  <div className="flex items-end justify-between gap-3">
+                    <div className="min-w-0 text-sm">
+                      <SignalCell signal={toMarketSignal(row.analytics)} />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeSymbol(row.requestSymbol)}
+                      disabled={removing}
+                      className="min-h-9 shrink-0 rounded-full border border-white/10 px-3 text-sm text-slate-400 disabled:opacity-60"
+                    >
+                      {removing ? "Removing..." : "Remove"}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="hidden overflow-x-auto md:block">
             <table className="w-full min-w-[1060px] border-collapse text-left">
               <thead className="text-xs uppercase tracking-wide text-slate-400">
                 <tr>
@@ -401,9 +447,9 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
 
 function Summary({ title, value, tone = "text-white" }: { title: string; value: string; tone?: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+    <div className="min-w-0 rounded-2xl border border-white/10 bg-white/5 p-3 sm:p-4">
       <span className="text-xs font-bold uppercase tracking-wide text-slate-400">{title}</span>
-      <strong className={`mt-2 block text-2xl font-black ${tone}`}>{value}</strong>
+      <strong className={`mt-1 block break-words text-lg font-black sm:mt-2 sm:text-2xl ${tone}`}>{value}</strong>
     </div>
   );
 }

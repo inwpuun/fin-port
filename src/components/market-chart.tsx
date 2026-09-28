@@ -112,7 +112,7 @@ export function MarketChart({
   data,
   chartType,
   view = "trend",
-  className = "h-[420px] min-h-[360px] md:h-[548px]"
+  className = "h-[380px] min-h-[320px] sm:h-[420px] md:h-[548px]"
 }: MarketChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -535,7 +535,7 @@ export function MarketChart({
         </button>
       </div>
       {legend.length > 0 && (
-        <div className="pointer-events-none absolute right-3 top-3 z-10 grid gap-1 rounded-2xl border border-white/10 bg-[#071019]/82 px-3 py-2 text-[11px] font-bold text-slate-300 backdrop-blur-md">
+        <div className="pointer-events-none absolute left-3 top-14 z-10 grid gap-0.5 rounded-xl border border-white/10 bg-[#071019]/82 px-2 py-1.5 text-[10px] font-bold text-slate-300 backdrop-blur-md sm:left-auto sm:right-3 sm:top-3 sm:gap-1 sm:rounded-2xl sm:px-3 sm:py-2 sm:text-[11px]">
           {legend.map((entry) => (
             <span key={entry.label} className="flex items-center gap-2 whitespace-nowrap">
               <i

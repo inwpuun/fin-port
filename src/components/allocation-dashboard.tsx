@@ -269,19 +269,19 @@ export function AllocationDashboard({
   }
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       <section className="grid gap-4 lg:grid-cols-[1.05fr_.95fr]">
-        <article className="glass-panel overflow-hidden rounded-3xl p-6">
+        <article className="glass-panel overflow-hidden rounded-3xl p-4 sm:p-6">
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">My Allocation</p>
-          <h1 className="max-w-4xl font-serif text-5xl leading-none md:text-7xl">Portfolio map by conviction lane.</h1>
-          <div className="mt-8 grid gap-3 md:grid-cols-3">
+          <h1 className="max-w-4xl font-serif text-4xl leading-none sm:text-5xl md:text-7xl">Portfolio map by conviction lane.</h1>
+          <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-8 sm:gap-3 sm:[grid-template-columns:repeat(auto-fit,minmax(200px,1fr))] [&>:last-child:nth-child(odd)]:col-span-2 sm:[&>:last-child:nth-child(odd)]:col-span-1">
             <Summary title="Total Mapped" value={formatMoney(totalValue)} />
             <Summary title="Largest Lane" value={largestGroup?.category || "None"} />
             <Summary title="Largest Weight" value={largestGroup ? weightFormat(largestGroup.value, totalValue) : "0.00%"} tone="text-cyan-signal" />
           </div>
         </article>
 
-        <section className="glass-panel rounded-3xl p-6">
+        <section className="glass-panel rounded-3xl p-4 sm:p-6">
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Allocation Lanes</p>
           <h2 className="mb-4 text-2xl font-black">Controls</h2>
           <div className="grid gap-3">
@@ -313,7 +313,7 @@ export function AllocationDashboard({
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(360px,520px)_1fr]">
-        <section className="glass-panel rounded-3xl p-6">
+        <section className="glass-panel rounded-3xl p-4 sm:p-6">
           <div className="mx-auto grid max-w-[460px] place-items-center">
             <div
               className="relative grid aspect-square w-full max-w-[360px] place-items-center rounded-full"
@@ -340,11 +340,28 @@ export function AllocationDashboard({
         </section>
 
         <section className="glass-panel overflow-hidden rounded-3xl">
-          <div className="border-b border-white/10 p-6">
+          <div className="border-b border-white/10 p-4 sm:p-6">
             <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Allocation Detail</p>
             <h2 className="text-2xl font-black">Category table</h2>
           </div>
-          <div className="overflow-x-auto">
+          <ul className="divide-y divide-white/10 md:hidden">
+            {groups.map((group) => (
+              <li key={group.category} className="grid gap-1 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="flex min-w-0 items-center gap-3">
+                    <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: group.color }} />
+                    <strong className="truncate">{group.category}</strong>
+                  </span>
+                  <span className="shrink-0 text-right">
+                    <strong className="block font-black">{formatMoney(group.value)}</strong>
+                    <small className="block font-black text-cyan-signal">{weightFormat(group.value, totalValue)}</small>
+                  </span>
+                </div>
+                <p className="text-sm text-slate-400">{group.symbols.join(", ")}</p>
+              </li>
+            ))}
+          </ul>
+          <div className="hidden overflow-x-auto md:block">
             <table className="w-full min-w-[760px] border-collapse text-left">
               <thead className="text-xs uppercase tracking-wide text-slate-400">
                 <tr>
@@ -372,11 +389,35 @@ export function AllocationDashboard({
             </table>
           </div>
 
-          <div className="border-t border-white/10 p-6">
+          <div className="border-t border-white/10 p-4 sm:p-6">
             <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Positions</p>
             <h2 className="text-2xl font-black">Edit a symbol&apos;s lane</h2>
           </div>
-          <div className="overflow-x-auto">
+          <ul className="divide-y divide-white/10 border-t border-white/10 md:hidden">
+            {positions.map((position) => (
+              <li key={`${position.category}-${position.symbol}`} className="flex items-center justify-between gap-3 p-4">
+                <div className="min-w-0">
+                  <strong className="block">{position.symbol}</strong>
+                  <small className="block truncate text-slate-400">{position.category}</small>
+                  {position.source === "missing" && <small className="block text-amber-signal">not in portfolio</small>}
+                  {position.source === "cash" && <small className="block text-slate-500">cash balance</small>}
+                  {position.source === "unassigned" && <small className="block text-amber-signal">no lane assigned</small>}
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <strong className="font-black">{formatMoney(position.value)}</strong>
+                  <button
+                    type="button"
+                    onClick={() => openEditor(position)}
+                    className="min-h-9 rounded-full border border-cyan-signal/30 bg-cyan-signal/10 px-3 text-sm font-bold text-cyan-signal"
+                  >
+                    Edit
+                  </button>
+                </div>
+              </li>
+            ))}
+            {positions.length === 0 && <li className="p-8 text-center text-slate-400">No allocation rows yet.</li>}
+          </ul>
+          <div className="hidden overflow-x-auto md:block">
             <table className="w-full min-w-[760px] border-collapse text-left">
               <thead className="text-xs uppercase tracking-wide text-slate-400">
                 <tr>
@@ -438,9 +479,9 @@ export function AllocationDashboard({
 
 function Summary({ title, value, tone = "text-white" }: { title: string; value: string; tone?: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+    <div className="min-w-0 rounded-2xl border border-white/10 bg-white/5 p-3 sm:p-4">
       <span className="text-xs font-bold uppercase tracking-wide text-slate-400">{title}</span>
-      <strong className={`mt-2 block text-2xl font-black ${tone}`}>{value}</strong>
+      <strong className={`mt-1 block break-words text-lg font-black sm:mt-2 sm:text-2xl ${tone}`}>{value}</strong>
     </div>
   );
 }

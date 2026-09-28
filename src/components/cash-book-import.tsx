@@ -9,7 +9,7 @@ export function CashBookImport() {
   const [state, formAction, pending] = useActionState(importCashBookAction, initialState);
 
   return (
-    <section className="glass-panel rounded-3xl p-6">
+    <section className="glass-panel rounded-3xl p-4 sm:p-6">
       <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Import</p>
       <h2 className="mb-1 text-2xl font-black">CSV to Postgres</h2>
       <p className="mb-4 text-sm text-slate-400">

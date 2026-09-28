@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
+import { MobileSortBar } from "@/components/mobile-sort";
 import { CashBookCalendar } from "@/components/cash-book-calendar";
 import { currencyFormat } from "@/lib/format";
 import type { CashBookFlowType, CashBookTransaction } from "@/types/cash-book";
@@ -195,12 +196,12 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
   }
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       <section className="grid gap-4 lg:grid-cols-[1.15fr_.85fr]">
-        <article className="glass-panel animate-rise-in overflow-hidden rounded-3xl p-6">
+        <article className="glass-panel animate-rise-in overflow-hidden rounded-3xl p-4 sm:p-6">
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Cash Book</p>
           <h1 className="max-w-full break-words font-serif text-4xl leading-none sm:text-5xl md:text-7xl">Cash flow ledger by month, memo, and category.</h1>
-          <div className="mt-8 grid grid-cols-1 gap-3 sm:[grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
+          <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-8 sm:gap-3 sm:[grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
             <Metric title="Income" value={money(totals.income)} tone="text-mint-signal" />
             <Metric title="Expense" value={money(totals.expense)} tone="text-rose-signal" />
             <Metric title="Net" value={money(totals.net)} tone={totals.net >= 0 ? "text-cyan-signal" : "text-amber-signal"} />
@@ -208,7 +209,7 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
           </div>
         </article>
 
-        <section className="glass-panel rounded-3xl p-6">
+        <section className="glass-panel rounded-3xl p-4 sm:p-6">
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Source</p>
           <h2 className="mb-4 text-2xl font-black">public/cash-book</h2>
           <div className="grid gap-3 text-sm text-slate-300">
@@ -224,9 +225,9 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
         </section>
       </section>
 
-      <section className="glass-panel sticky top-4 z-30 rounded-3xl p-3 shadow-[0_22px_60px_rgba(0,0,0,.38)]">
-        <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
-          <div className="flex flex-wrap gap-2">
+      <section className="glass-panel sticky top-2 z-30 rounded-3xl p-2 shadow-[0_22px_60px_rgba(0,0,0,.38)] sm:top-4 sm:p-3">
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-2 sm:gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <div className={chipRowClass}>
             {availableYears.map((year) => (
               <button
                 key={year}
@@ -245,7 +246,7 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
               All years
             </button>
           </div>
-          <nav className="flex flex-wrap gap-2" aria-label="Cash book sections">
+          <nav className={chipRowClass} aria-label="Cash book sections">
             {cashBookSubpages.map((subpage) => (
               <button
                 key={subpage.value}
@@ -264,7 +265,18 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
         <>
           <section className="glass-panel overflow-hidden rounded-3xl">
             <SectionHeading eyebrow="Year Close" title="Income, expense, and net by year" />
-            <div className="overflow-x-auto">
+            <ul className="divide-y divide-white/10 md:hidden">
+              {yearRows.map((row) => (
+                <li key={row.year} className="grid gap-2 p-4">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <strong className="font-black">{row.year}</strong>
+                    <small className="text-slate-400">{numberFormat(row.count)} tx</small>
+                  </div>
+                  <FlowTotals income={row.income} expense={row.expense} net={row.net} />
+                </li>
+              ))}
+            </ul>
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full min-w-[720px] border-collapse text-left">
                 <thead className="text-xs uppercase tracking-wide text-slate-400">
                   <tr>
@@ -321,7 +333,57 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
       {activeSubpage === "categories" && (
         <section className="glass-panel overflow-hidden rounded-3xl">
           <SectionHeading eyebrow={`${selectedYearLabel} Category Matrix`} title="Income and expense by category" />
-        <div className="overflow-x-auto">
+        <ul className="divide-y divide-white/10 md:hidden">
+          {categoryRows.map((row) => {
+            const expanded = expandedCategory === row.category;
+
+            return (
+              <li key={row.category} className="grid gap-3 p-4">
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  onClick={() => setExpandedCategory((current) => (current === row.category ? "" : row.category))}
+                  className="flex w-full items-center gap-3 text-left"
+                >
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 font-black text-cyan-signal">
+                    {expanded ? "-" : "+"}
+                  </span>
+                  <span className="min-w-0">
+                    <strong className="block truncate text-white">{row.category}</strong>
+                    <small className="text-slate-400">{row.group} / {numberFormat(row.count)} tx</small>
+                  </span>
+                </button>
+                <FlowTotals
+                  income={row.income}
+                  expense={row.expense}
+                  net={row.net}
+                  onOpenIncome={() => openCategoryTotal(row, "income")}
+                  onOpenExpense={() => openCategoryTotal(row, "expense")}
+                />
+                {expanded && (
+                  <div className="grid max-h-[380px] gap-2 overflow-auto">
+                    {row.transactions.map((transaction) => (
+                      <article key={transaction.id} className="rounded-2xl border border-white/10 bg-void/35 p-3" title={transaction.memo || transaction.description}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <strong className="block truncate">{transaction.description}</strong>
+                            <span className="text-xs text-slate-400">
+                              {transaction.dateLabel} {transaction.time}
+                            </span>
+                          </div>
+                          <span className={`whitespace-nowrap text-sm font-black ${transaction.type === "income" ? "text-mint-signal" : "text-rose-signal"}`}>
+                            {money(transaction.amount)}
+                          </span>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        <div className="hidden overflow-x-auto md:block">
           <table className="w-full min-w-[1180px] border-collapse text-left">
             <thead className="text-xs uppercase tracking-wide text-slate-400">
               <tr>
@@ -412,9 +474,9 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
       )}
 
       {activeSubpage === "graph" && (
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,.75fr)]">
+        <section className="grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,.75fr)]">
         <section className="glass-panel overflow-hidden rounded-3xl">
-          <div className="flex flex-col gap-4 border-b border-white/10 p-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="flex flex-col gap-4 border-b border-white/10 p-4 sm:p-6 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">{selectedYearLabel} Expense Graph</p>
               <h2 className="text-2xl font-black">Compare spending by period</h2>
@@ -433,7 +495,7 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
                   {period.label}
                 </button>
               ))}
-              <label className="field-shell grid min-w-[180px] gap-1 rounded-2xl px-4 py-2">
+              <label className="field-shell grid min-w-[180px] flex-1 gap-1 rounded-2xl px-4 py-2 sm:flex-none">
                 <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">Category</span>
                 <select
                   value={activeChartCategory}
@@ -468,7 +530,7 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
           />
         </section>
 
-        <section className="glass-panel rounded-3xl p-6">
+        <section className="glass-panel rounded-3xl p-4 sm:p-6">
           <div className="mb-5 flex items-start justify-between gap-4">
             <div>
               <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">
@@ -482,9 +544,9 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
               </button>
             )}
           </div>
-          <div className="grid gap-3">
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-3">
             {expenseMix.map((row) => (
-              <button key={row.category} type="button" onClick={() => openExpenseMix(row)} className="grid gap-2 rounded-2xl border border-white/0 p-2 text-left transition hover:border-cyan-signal/25 hover:bg-white/5">
+              <button key={row.category} type="button" onClick={() => openExpenseMix(row)} className="grid grid-cols-[minmax(0,1fr)] gap-2 rounded-2xl border border-white/0 p-2 text-left transition hover:border-cyan-signal/25 hover:bg-white/5">
                 <span className="flex items-center justify-between gap-3">
                   <span className="flex min-w-0 items-center gap-3">
                     <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: row.color }} />
@@ -505,7 +567,7 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
 
       {activeSubpage === "descriptions" && (
         <section className="glass-panel overflow-hidden rounded-3xl">
-        <div className="flex flex-col gap-4 border-b border-white/10 p-6 xl:flex-row xl:items-end xl:justify-between">
+        <div className="flex flex-col gap-4 border-b border-white/10 p-4 sm:p-6 xl:flex-row xl:items-end xl:justify-between">
           <div>
             <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">{selectedYearLabel} Description Rollup</p>
             <h2 className="text-2xl font-black">Income or expense by transaction description</h2>
@@ -535,7 +597,32 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
             </div>
           </div>
         </div>
-        <div className="overflow-x-auto">
+        <MobileSortBar
+          columns={descriptionSortColumns}
+          sort={{ key: descriptionSort.field, direction: descriptionSort.direction }}
+          onSort={toggleDescriptionSort}
+        />
+        <ul className="divide-y divide-white/10 md:hidden">
+          {descriptionRows.map((row) => (
+            <li key={row.description}>
+              <button type="button" onClick={() => openDescriptionRow(row)} className="grid w-full gap-2 p-4 text-left active:bg-white/[0.04]">
+                <span className="flex items-start justify-between gap-3">
+                  <span className="min-w-0">
+                    <strong className="block break-words font-black">{row.description}</strong>
+                    <small className="block truncate text-slate-400">{row.categories.join(", ")}</small>
+                  </span>
+                  <small className="shrink-0 text-right text-slate-400">
+                    {numberFormat(row.count)} tx
+                    <span className="block">{row.latestDate}</span>
+                  </small>
+                </span>
+                <FlowTotals income={row.income} expense={row.expense} net={row.net} />
+              </button>
+            </li>
+          ))}
+          {!descriptionRows.length && <li className="p-8 text-center text-sm text-slate-400">No matching descriptions.</li>}
+        </ul>
+        <div className="hidden overflow-x-auto md:block">
           <table className="w-full min-w-[860px] border-collapse text-left">
             <thead className="text-xs uppercase tracking-wide text-slate-400">
               <tr>
@@ -593,7 +680,7 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
 
 function SectionHeading({ eyebrow, title }: { eyebrow: string; title: string }) {
   return (
-    <div className="border-b border-white/10 p-6">
+    <div className="border-b border-white/10 p-4 sm:p-6">
       <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">{eyebrow}</p>
       <h2 className="text-2xl font-black">{title}</h2>
     </div>
@@ -602,9 +689,9 @@ function SectionHeading({ eyebrow, title }: { eyebrow: string; title: string }) 
 
 function Metric({ title, value, tone = "text-white" }: { title: string; value: string; tone?: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+    <div className="min-w-0 rounded-2xl border border-white/10 bg-white/5 p-3 sm:p-4">
       <span className="text-xs font-bold uppercase tracking-wide text-slate-400">{title}</span>
-      <strong className={`mt-2 block break-words text-xl font-black leading-tight sm:text-2xl ${tone}`}>{value}</strong>
+      <strong className={`mt-1 block break-words text-base font-black leading-tight sm:mt-2 sm:text-2xl ${tone}`}>{value}</strong>
     </div>
   );
 }
@@ -658,7 +745,26 @@ function MonthTable({
   onOpenTotalNet?: (row: CategoryRow) => void;
 }) {
   return (
-    <div className="overflow-x-auto">
+    <>
+    <ul className="divide-y divide-white/10 md:hidden">
+      {rows.map((row) => (
+        <li key={row.category} className="grid gap-2 p-4">
+          <span className="flex min-w-0 items-center gap-3">
+            <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: colorForGroup(row.group) }} />
+            <strong className="truncate">{row.category}</strong>
+          </span>
+          <FlowTotals
+            income={row.income}
+            expense={row.expense}
+            net={row.net}
+            onOpenIncome={onOpenTotalIncome ? () => onOpenTotalIncome(row) : undefined}
+            onOpenExpense={onOpenTotalExpense ? () => onOpenTotalExpense(row) : undefined}
+            onOpenNet={onOpenTotalNet && row.count ? () => onOpenTotalNet(row) : undefined}
+          />
+        </li>
+      ))}
+    </ul>
+    <div className="hidden overflow-x-auto md:block">
       <table className="w-full min-w-[1120px] border-collapse text-left">
         <thead className="text-xs uppercase tracking-wide text-slate-400">
           <tr>
@@ -705,12 +811,32 @@ function MonthTable({
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 
 function MonthlyExpenseTable({ rows, onOpen }: { rows: MonthlyCashRow[]; onOpen: (row: MonthlyCashRow) => void }) {
   return (
-    <div className="overflow-x-auto">
+    <>
+    <ul className="divide-y divide-white/10 md:hidden">
+      {rows.map((row) => (
+        <li key={row.key}>
+          <button
+            type="button"
+            onClick={() => onOpen(row)}
+            disabled={!row.expense}
+            className="grid w-full gap-2 p-4 text-left enabled:active:bg-white/[0.04]"
+          >
+            <span className="flex items-baseline justify-between gap-3">
+              <strong className="font-black">{row.label}</strong>
+              <small className="text-slate-400">{numberFormat(row.count)} tx</small>
+            </span>
+            <FlowTotals income={row.income} expense={row.expense} net={row.net} />
+          </button>
+        </li>
+      ))}
+    </ul>
+    <div className="hidden overflow-x-auto md:block">
       <table className="w-full min-w-[760px] border-collapse text-left">
         <thead className="text-xs uppercase tracking-wide text-slate-400">
           <tr>
@@ -743,6 +869,65 @@ function MonthlyExpenseTable({ rows, onOpen }: { rows: MonthlyCashRow[]; onOpen:
         </tbody>
       </table>
     </div>
+    </>
+  );
+}
+
+/**
+ * Income / expense / net in three columns, for the phone-width card lists.
+ * Amounts are compacted so all three fit; a cell with a handler opens its transactions.
+ */
+function FlowTotals({
+  income,
+  expense,
+  net,
+  onOpenIncome,
+  onOpenExpense,
+  onOpenNet
+}: {
+  income: number;
+  expense: number;
+  net: number;
+  onOpenIncome?: () => void;
+  onOpenExpense?: () => void;
+  onOpenNet?: () => void;
+}) {
+  return (
+    <span className="grid grid-cols-3 gap-2">
+      <FlowCell label="Income" value={compactMoney(income)} tone="text-mint-signal" onOpen={income ? onOpenIncome : undefined} />
+      <FlowCell label="Expense" value={compactMoney(expense)} tone="text-rose-signal" onOpen={expense ? onOpenExpense : undefined} />
+      <FlowCell label="Net" value={compactMoney(net)} tone={net >= 0 ? "text-cyan-signal" : "text-amber-signal"} onOpen={onOpenNet} alignEnd />
+    </span>
+  );
+}
+
+function FlowCell({
+  label,
+  value,
+  tone,
+  onOpen,
+  alignEnd = false
+}: {
+  label: string;
+  value: string;
+  tone: string;
+  onOpen?: () => void;
+  alignEnd?: boolean;
+}) {
+  const body = (
+    <>
+      <span className="block text-[10px] font-black uppercase tracking-wider text-slate-500">{label}</span>
+      <span className={`block truncate text-sm font-black ${tone} ${onOpen ? "underline decoration-white/20 underline-offset-4" : ""}`}>{value}</span>
+    </>
+  );
+  const align = alignEnd ? "text-right" : "text-left";
+
+  if (!onOpen) return <span className={`min-w-0 ${align}`}>{body}</span>;
+
+  return (
+    <button type="button" onClick={onOpen} className={`-m-1 min-w-0 rounded-xl p-1 ${align} active:bg-white/8`}>
+      {body}
+    </button>
   );
 }
 
@@ -819,7 +1004,7 @@ function MemoTooltip({ memo }: { memo: string }) {
       <span className="rounded-full border border-cyan-signal/25 bg-cyan-signal/10 px-3 py-1 text-cyan-signal">Memo</span>
       <span
         role="tooltip"
-        className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 w-64 rounded-2xl border border-white/10 bg-void px-4 py-3 text-left text-sm text-white opacity-0 shadow-2xl transition group-hover:opacity-100 group-focus:opacity-100"
+        className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 w-64 max-w-[calc(100vw-4rem)] rounded-2xl border border-white/10 bg-void px-4 py-3 text-left text-sm text-white opacity-0 shadow-2xl transition group-hover:opacity-100 group-focus:opacity-100"
       >
         {memo}
       </span>
@@ -832,36 +1017,36 @@ function TransactionModal({ modal, onClose }: { modal: NonNullable<TransactionMo
 
   return (
     <div
-      className="fixed inset-0 z-50 grid place-items-center bg-void/80 p-3 backdrop-blur-xl sm:p-6"
+      className="fixed inset-0 z-50 grid place-items-center bg-void/80 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-xl sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-label={modal.title}
       onClick={onClose}
     >
       <div
-        className="glass-panel grid max-h-[92vh] w-full max-w-6xl grid-rows-[auto_auto_1fr] overflow-hidden rounded-3xl"
+        className="glass-panel grid max-h-full w-full max-w-6xl grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-3xl sm:max-h-[92vh]"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex flex-col gap-4 border-b border-white/10 p-5 md:flex-row md:items-start md:justify-between">
+        <div className="flex items-start justify-between gap-4 border-b border-white/10 p-4 sm:p-5">
           <div className="min-w-0">
             <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">{modal.eyebrow}</p>
-            <h2 className="break-words text-2xl font-black md:text-3xl">{modal.title}</h2>
+            <h2 className="break-words text-xl font-black sm:text-2xl md:text-3xl">{modal.title}</h2>
           </div>
           <button type="button" onClick={onClose} className={chipClass(false)}>
             Close
           </button>
         </div>
-        <div className="grid gap-3 border-b border-white/10 p-5 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 border-b border-white/10 p-4 sm:grid-cols-4 sm:gap-3 sm:p-5">
           <Metric title="Transactions" value={numberFormat(modal.transactions.length)} />
           <Metric title="Income" value={money(totals.income)} tone="text-mint-signal" />
           <Metric title="Expense" value={money(totals.expense)} tone="text-rose-signal" />
           <Metric title="Net" value={money(totals.net)} tone={totals.net >= 0 ? "text-cyan-signal" : "text-amber-signal"} />
         </div>
-        <div className="overflow-auto p-5">
+        <div className="overflow-auto p-4 sm:p-5">
           <div className="grid gap-3">
             {modal.transactions.map((transaction) => (
               <article key={transaction.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4" title={transaction.memo || transaction.description}>
-                <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-start">
+                <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <strong className="block break-words text-white">{transaction.description}</strong>
                     <span className="text-sm text-slate-400">
@@ -911,12 +1096,13 @@ function ExpenseChart({
 
   const axisTicks = buildAxisTicks(maxValue);
   const legendCategories = selectedCategory === "all" ? categories : categories.filter((category) => category.category === selectedCategory);
-  const chartMinWidth = Math.max(760, rows.length * 56);
+  // Bars keep a usable width; on a phone the plot scrolls sideways and the legend below wraps.
+  const chartMinWidth = Math.max(560, rows.length * 56);
 
   return (
-    <div className="overflow-x-auto p-6">
-      <div className="grid gap-4" style={{ minWidth: chartMinWidth }}>
-        <div className="grid grid-cols-[76px_1fr] gap-4">
+    <div className="grid gap-4 p-4 sm:p-6">
+      <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+        <div className="grid grid-cols-[60px_1fr] gap-3 sm:grid-cols-[76px_1fr] sm:gap-4" style={{ minWidth: chartMinWidth }}>
           <div className="relative h-[320px]" aria-hidden="true">
             {axisTicks.map((tick) => (
               <span
@@ -995,7 +1181,8 @@ function ExpenseChart({
             </div>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2 pl-20">
+      </div>
+        <div className="flex flex-wrap gap-2 sm:pl-20">
           {legendCategories.map((category) => (
             <button
               key={category.category}
@@ -1013,7 +1200,6 @@ function ExpenseChart({
             </button>
           )}
         </div>
-      </div>
     </div>
   );
 }
@@ -1334,6 +1520,20 @@ function percentage(value: number, total: number) {
   if (!total) return 0;
   return Math.max(2, Math.min(100, (value / total) * 100));
 }
+
+/** Chip rows scroll sideways on phones instead of wrapping, so the sticky bar stays short. */
+const chipRowClass =
+  "-mx-2 flex gap-2 overflow-x-auto px-2 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 [&>*]:shrink-0";
+
+const descriptionSortColumns: Array<{ key: DescriptionSortField; label: string }> = [
+  { key: "description", label: "Description" },
+  { key: "category", label: "Category" },
+  { key: "income", label: "Income" },
+  { key: "expense", label: "Expense" },
+  { key: "net", label: "Net" },
+  { key: "count", label: "Count" },
+  { key: "latest", label: "Latest" }
+];
 
 function chipClass(active: boolean) {
   return active

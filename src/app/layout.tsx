@@ -1,9 +1,9 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { DataFreshness } from "@/components/data-freshness";
 import { LockButton } from "@/components/lock-button";
-import { SiteNav } from "@/components/site-nav";
+import { MobileNav, SiteNav } from "@/components/site-nav";
 import { emptyFreshness, getDataFreshness } from "@/lib/data/freshness";
 import { SESSION_COOKIE, verifySessionCookie } from "@/lib/session";
 import "./globals.css";
@@ -14,6 +14,14 @@ export const metadata: Metadata = {
   icons: {
     icon: "/favicon.svg"
   }
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  // Lets the mobile tab bar sit under the home indicator and pad itself out.
+  viewportFit: "cover",
+  themeColor: "#06080c"
 };
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -40,27 +48,33 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
           aria-hidden="true"
           className="animate-radar pointer-events-none fixed -right-72 top-[10vh] aspect-square w-[46rem] rounded-full border border-cyan-signal/15 before:absolute before:inset-[17%] before:rounded-full before:border before:border-cyan-signal/15 before:content-[''] after:absolute after:inset-[34%] after:rounded-full after:border after:border-cyan-signal/15 after:content-['']"
         />
-        <main className="relative z-10 mx-auto min-h-screen w-[min(1500px,calc(100%-32px))] py-5 md:py-7">
-          <header className="mb-6 grid min-h-20 gap-4 lg:grid-cols-[auto_1fr] lg:items-center">
-            <div className="flex items-center gap-3">
-              <Link href="/" className="inline-flex items-center gap-3 text-white no-underline">
-                <span className="grid h-12 w-12 place-items-center rounded-2xl border border-cyan-signal/55 bg-cyan-signal/10 font-serif text-lg font-bold shadow-[0_0_34px_rgba(82,214,255,.18)]">
+        {/*
+          No z-index here: one would make <main> a stacking context and trap the
+          modals' z-50 beneath the mobile tab bar. DOM order already paints it
+          over the decorative layers above.
+        */}
+        <main className="relative mx-auto min-h-screen w-[min(1500px,calc(100%-24px))] pt-4 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:w-[min(1500px,calc(100%-32px))] md:py-7">
+          <header className="mb-4 flex flex-wrap items-center justify-between gap-3 md:mb-6 xl:min-h-20">
+            <div className="flex min-w-0 items-center gap-3">
+              <Link href="/" className="inline-flex min-w-0 items-center gap-3 text-white no-underline">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-cyan-signal/55 bg-cyan-signal/10 font-serif text-base font-bold shadow-[0_0_34px_rgba(82,214,255,.18)] md:h-12 md:w-12 md:text-lg">
                   FP
                 </span>
-                <span>
-                  <strong className="block font-serif text-3xl leading-none md:text-5xl">Fin Port</strong>
-                  <small className="block text-sm text-slate-400">market signal console</small>
+                <span className="min-w-0">
+                  <strong className="block font-serif text-2xl leading-none md:text-5xl">Fin Port</strong>
+                  <small className="block truncate text-xs text-slate-400 md:text-sm">market signal console</small>
                 </span>
               </Link>
               <DataFreshness freshness={freshness} />
             </div>
-            <div className="flex items-center gap-2 lg:justify-self-end">
+            <div className="flex shrink-0 items-center gap-2 md:max-xl:basis-full md:max-xl:justify-between">
               <SiteNav />
               <LockButton />
             </div>
           </header>
           {children}
         </main>
+        <MobileNav />
       </body>
     </html>
   );

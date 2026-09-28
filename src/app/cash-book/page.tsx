@@ -8,7 +8,7 @@ export default async function CashBookPage() {
   const transactions = await getCashBookTransactions();
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       <CashBookImport />
       <CashBookDashboard transactions={transactions} />
     </div>

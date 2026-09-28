@@ -43,6 +43,15 @@ button {
   cursor: pointer;
 }
 
+/* iOS zooms the page when a focused field is under 16px; keep phones at 16px or more. */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em);
+  }
+}
+
 @keyframes rise-in {
   from {
     opacity: 0;

@@ -59,7 +59,7 @@ export default async function UnlockPage({
 
   return (
     <div className="grid min-h-[70vh] place-items-center">
-      <section className="glass-panel w-full max-w-md rounded-3xl p-8">
+      <section className="glass-panel w-full max-w-md rounded-3xl p-5 sm:p-8">
         <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">
           Fin Port
         </p>

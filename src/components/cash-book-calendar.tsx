@@ -244,7 +244,7 @@ export function CashBookCalendar({
 
   return (
     <section className="glass-panel overflow-hidden rounded-3xl">
-      <div className="flex flex-col gap-4 border-b border-white/10 p-6 lg:flex-row lg:items-end lg:justify-between">
+      <div className="flex flex-col gap-4 border-b border-white/10 p-4 sm:p-6 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">{year === "all" ? "All years" : year} Daily Calendar</p>
           <h2 className="text-2xl font-black">{viewTitle || "Income and expense by day"}</h2>
@@ -262,7 +262,7 @@ export function CashBookCalendar({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 border-b border-white/10 p-6 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 border-b border-white/10 p-4 sm:gap-3 sm:p-6 lg:grid-cols-4">
         <Metric title="Month Income" value={money(monthTotals.income)} tone="text-mint-signal" />
         <Metric title="Month Expense" value={money(monthTotals.expense)} tone="text-rose-signal" />
         <Metric title="Month Net" value={money(monthTotals.net)} tone={monthTotals.net >= 0 ? "text-cyan-signal" : "text-amber-signal"} />
@@ -340,9 +340,9 @@ function renderDayEvent(info: EventDisplayInfo) {
 
 function Metric({ title, value, tone = "text-white" }: { title: string; value: string; tone?: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+    <div className="min-w-0 rounded-2xl border border-white/10 bg-white/5 p-3 sm:p-4">
       <span className="text-xs font-bold uppercase tracking-wide text-slate-400">{title}</span>
-      <strong className={`mt-2 block break-words text-lg font-black leading-tight sm:text-xl ${tone}`}>{value}</strong>
+      <strong className={`mt-1 block break-words text-base font-black leading-tight sm:mt-2 sm:text-xl ${tone}`}>{value}</strong>
     </div>
   );
 }

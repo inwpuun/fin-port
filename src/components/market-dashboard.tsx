@@ -122,8 +122,8 @@ export function MarketDashboard() {
   return (
     <div className={loading ? "animate-glow" : ""}>
       <section className="glass-panel mb-4 rounded-3xl p-3">
-        <form onSubmit={submitSymbol} className="grid gap-2 md:grid-cols-[1fr_110px_150px_56px]">
-          <label className="field-shell grid gap-1 rounded-2xl px-4 py-3">
+        <form onSubmit={submitSymbol} className="grid grid-cols-[1fr_1fr_56px] gap-2 md:grid-cols-[1fr_110px_150px_56px]">
+          <label className="field-shell col-span-3 grid gap-1 rounded-2xl px-4 py-3 md:col-span-1">
             <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Symbol</span>
             <input
               className="min-w-0 bg-transparent text-xl text-white outline-none"
@@ -134,7 +134,7 @@ export function MarketDashboard() {
               aria-label="Enter stock, gold, bitcoin, or index symbol"
             />
           </label>
-          <label className="field-shell grid gap-1 rounded-2xl px-4 py-3">
+          <label className="field-shell grid min-w-0 gap-1 rounded-2xl px-4 py-3">
             <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Range</span>
             <select
               className="bg-transparent text-lg text-white outline-none"
@@ -155,7 +155,7 @@ export function MarketDashboard() {
               ))}
             </select>
           </label>
-          <label className="field-shell grid gap-1 rounded-2xl px-4 py-3">
+          <label className="field-shell grid min-w-0 gap-1 rounded-2xl px-4 py-3">
             <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Top window</span>
             <select
               className="bg-transparent text-lg text-white outline-none"
@@ -185,7 +185,7 @@ export function MarketDashboard() {
             <button
               key={item}
               onClick={() => loadMarket(item, range, drawdownRange)}
-              className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-slate-300 transition hover:border-cyan-signal/40 hover:text-white"
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-slate-300 transition sm:px-4 sm:py-2 sm:text-base hover:border-cyan-signal/40 hover:text-white"
             >
               {item === "GC=F" ? "Gold" : item === "BTC-USD" ? "BTC" : item}
             </button>
@@ -193,15 +193,15 @@ export function MarketDashboard() {
         </div>
       </section>
 
-      <section className="mb-4 grid gap-4 lg:grid-cols-[minmax(460px,2.3fr)_repeat(3,minmax(160px,1fr))]">
-        <article className="glass-panel animate-rise-in grid gap-4 overflow-hidden rounded-3xl p-6 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+      <section className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-[minmax(460px,2.3fr)_repeat(3,minmax(160px,1fr))]">
+        <article className="glass-panel animate-rise-in col-span-full grid gap-4 overflow-hidden rounded-3xl p-4 sm:p-6 md:grid-cols-[minmax(0,1fr)_auto] md:items-end lg:col-span-1">
           <div className="min-w-0">
             <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Watching</p>
-            <h1 className="break-words font-serif text-5xl leading-none md:text-6xl">{data?.name || "Loading"}</h1>
+            <h1 className="break-words font-serif text-4xl leading-none sm:text-5xl md:text-6xl">{data?.name || "Loading"}</h1>
             <p className="mt-3 text-slate-300">{data ? `${data.symbol} · ${data.type} · ${data.currency}${data.exchange ? ` · ${data.exchange}` : ""}` : "Awaiting market"}</p>
           </div>
           <div className="text-left md:text-right">
-            <strong className="block whitespace-nowrap text-5xl font-black">{data ? currencyFormat(data.price, data.currency) : "$0.00"}</strong>
+            <strong className="block whitespace-nowrap text-4xl font-black sm:text-5xl">{data ? currencyFormat(data.price, data.currency) : "$0.00"}</strong>
             <span className={`mt-2 inline-flex rounded-full px-3 py-1 text-lg font-black ${changeTone} bg-white/8`}>
               {data ? `${currencyFormat(data.change, data.currency)} ${percentFormat(data.changePercent)}` : "0.00%"}
             </span>
@@ -223,6 +223,7 @@ export function MarketDashboard() {
           title="Vs Trend"
           value={value?.zScore === null || !value ? "n/a" : `${value.zScore >= 0 ? "+" : ""}${value.zScore.toFixed(2)}σ`}
           note={data ? `${data.rangeLabel} fit · range move ${percentFormat(data.rangeChange)}` : "regression channel"}
+          className="max-sm:col-span-2"
           tone={!value?.zScore ? "text-white" : value.zScore > 1 ? "text-rose-signal" : value.zScore < -1 ? "text-mint-signal" : "text-white"}
         />
       </section>
@@ -230,7 +231,7 @@ export function MarketDashboard() {
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_390px]">
         <div className="grid content-start gap-4">
           <section className="glass-panel overflow-hidden rounded-3xl">
-            <div className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-col gap-3 p-4 sm:gap-4 sm:p-5 md:flex-row md:items-center md:justify-between">
               <div>
                 <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">
                   {data?.symbol || "AAPL"} · {data?.rangeLabel || "1 year"}
@@ -248,7 +249,7 @@ export function MarketDashboard() {
               </div>
             </div>
             <MarketChart data={data} chartType={chartType} view={view} />
-            <div className="flex flex-col gap-2 border-t border-white/10 px-5 py-4 text-sm text-slate-400 md:flex-row md:justify-between">
+            <div className="flex flex-col gap-1 border-t border-white/10 px-4 py-3 text-xs sm:gap-2 sm:px-5 sm:py-4 sm:text-sm text-slate-400 md:flex-row md:justify-between">
               <span>Source: {data?.source || "loading"}</span>
               <span>
                 {data ? `${data.analytics.bars} bars shown, ${data.analytics.historyBars} read for the averages` : "loading"}
@@ -263,7 +264,7 @@ export function MarketDashboard() {
         <aside className="grid content-start gap-4">
           {data && <MarketVerdict data={data} />}
 
-          <section className="glass-panel rounded-3xl p-5">
+          <section className="glass-panel rounded-3xl p-4 sm:p-5">
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Watchlist</p>
@@ -291,7 +292,7 @@ export function MarketDashboard() {
             </div>
           </section>
 
-          <section className="glass-panel rounded-3xl p-5">
+          <section className="glass-panel rounded-3xl p-4 sm:p-5">
             <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Data log</p>
             <h2 className="mb-4 text-xl font-black">Activity</h2>
             <div className="grid max-h-80 gap-2 overflow-auto" aria-live="polite">
@@ -323,12 +324,12 @@ const trendTones = {
   downtrend: "text-rose-signal"
 } as const;
 
-function Metric({ title, value, note, tone = "text-white" }: { title: string; value: string; note: string; tone?: string }) {
+function Metric({ title, value, note, tone = "text-white", className = "" }: { title: string; value: string; note: string; tone?: string; className?: string }) {
   return (
-    <article className="glass-panel animate-rise-in relative min-h-36 overflow-hidden rounded-3xl p-6 before:absolute before:-bottom-12 before:-right-8 before:h-32 before:w-32 before:rounded-full before:border before:border-cyan-signal/20 before:content-['']">
-      <p className="mb-3 text-xs font-black uppercase tracking-wider text-slate-400">{title}</p>
-      <strong className={`block text-3xl font-black ${tone}`}>{value}</strong>
-      <span className="text-slate-400">{note}</span>
+    <article className={`glass-panel animate-rise-in relative min-w-0 overflow-hidden rounded-3xl p-4 before:absolute before:-bottom-12 before:-right-8 before:h-32 before:w-32 before:rounded-full before:border before:border-cyan-signal/20 before:content-[''] sm:min-h-36 sm:p-6 ${className}`}>
+      <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400 sm:mb-3">{title}</p>
+      <strong className={`block truncate text-2xl font-black sm:text-3xl ${tone}`}>{value}</strong>
+      <span className="text-sm text-slate-400 sm:text-base">{note}</span>
     </article>
   );
 }

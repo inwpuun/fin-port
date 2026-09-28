@@ -69,7 +69,7 @@ export function MarketVerdict({ data }: { data: MarketData }) {
   const offset = (verdict.score + 1) / 2;
 
   return (
-    <section className="glass-panel rounded-3xl p-5">
+    <section className="glass-panel rounded-3xl p-4 sm:p-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Composite read</p>
@@ -301,7 +301,7 @@ function Lens({
   stats: Stat[];
 }) {
   return (
-    <section className="glass-panel rounded-3xl p-5">
+    <section className="glass-panel rounded-3xl p-4 sm:p-5">
       <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">
         {title} &middot; {subtitle}
       </p>
