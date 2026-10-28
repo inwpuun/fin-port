@@ -476,7 +476,7 @@ function profitPercent(point: NetWorthPoint) {
 }
 
 function compactMoney(value: number, currency: DisplayCurrency) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency, notation: "compact", maximumFractionDigits: 1 }).format(value);
+  return new Intl.NumberFormat("en-US", { style: "currency", currency, currencyDisplay: "narrowSymbol", notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 function formatDay(time: string) {

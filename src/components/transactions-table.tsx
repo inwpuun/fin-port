@@ -197,7 +197,7 @@ function describe(transaction: HoldingTransaction) {
 
 /** Totals are money that changed hands, so cents; prices keep currencyFormat's extra places. */
 function totalFormat(value: number, currency: string) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat("en-US", { style: "currency", currency, currencyDisplay: "narrowSymbol", maximumFractionDigits: 2 }).format(value);
 }
 
 function quantityFormat(value: number) {

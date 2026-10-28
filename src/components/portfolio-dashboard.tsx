@@ -6,6 +6,7 @@ import { drawdownRanges, fallbackMarketData, normalizeSymbol } from "@/lib/marke
 import { currencyFormat, percentFormat } from "@/lib/format";
 import type { AllocationRule, CashBalances, Holding, HoldingTransaction, HoldingWithMarket, PortfolioSeed } from "@/types/portfolio";
 import type { DrawdownRange, MarketData } from "@/types/market";
+import type { UsdThbRate } from "@/lib/bot-rate";
 import { SymbolChartModal } from "./symbol-chart-modal";
 import { SignalCell } from "./market-analysis";
 import { CardStat, MobileSortBar } from "./mobile-sort";
@@ -28,12 +29,6 @@ type PortfolioSort = {
 };
 
 type DisplayCurrency = "USD" | "THB";
-
-type UsdThbRate = {
-  rate: number;
-  period: string;
-  source: string;
-};
 
 type PortfolioWriteResponse = {
   seed: PortfolioSeed;
@@ -62,12 +57,15 @@ export function PortfolioDashboard({
   defaultPortfolio,
   allocationRules: initialAllocationRules = [],
   transactions: initialTransactions = [],
-  cash: initialCash = { USD: 0, THB: 0 }
+  cash: initialCash = { USD: 0, THB: 0 },
+  usdThbRate: initialUsdThbRate = null
 }: {
   defaultPortfolio: PortfolioSeed[];
   allocationRules?: AllocationRule[];
   transactions?: HoldingTransaction[];
   cash?: CashBalances;
+  /** BOT rate loaded with the page; when present the page opens in baht. */
+  usdThbRate?: UsdThbRate | null;
 }) {
   const [portfolioSeed, setPortfolioSeed] = useState(defaultPortfolio);
   const [allocationRules, setAllocationRules] = useState(initialAllocationRules);
@@ -87,8 +85,8 @@ export function PortfolioDashboard({
   const [removingSymbol, setRemovingSymbol] = useState("");
   const [chartSymbol, setChartSymbol] = useState("");
   const [bootstrapped, setBootstrapped] = useState(false);
-  const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>("USD");
-  const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(null);
+  const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>(initialUsdThbRate ? "THB" : "USD");
+  const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(initialUsdThbRate);
   const [fxLoading, setFxLoading] = useState(false);
   const [fxError, setFxError] = useState("");
   const [transactions, setTransactions] = useState(initialTransactions);
@@ -122,9 +120,6 @@ export function PortfolioDashboard({
     }
 
     materializeDefaultPortfolio(portfolioSeed, drawdownRange);
-    // Baht cash is counted in the dollar totals at the market rate, the same
-    // rate a THB cost basis is converted at below.
-    fetchMarket("THB=X").then((market) => setThbPerUsd(market.price > 0 ? market.price : null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -179,19 +174,31 @@ export function PortfolioDashboard({
     });
   }, [rows, sort]);
 
-  async function fetchMarket(symbolInput: string, topRange = drawdownRange) {
-    const url = new URL("/api/market", window.location.origin);
-    url.searchParams.set("symbol", symbolInput);
-    url.searchParams.set("range", "1y");
-    url.searchParams.set("drawdownRange", topRange);
+  /**
+   * Every row's market data in one request, without candles: the table reads
+   * price, drawdown and signal only. THB=X rides along because baht cash and
+   * a baht cost basis are converted at the market rate. A symbol that fails
+   * gets the same placeholder data as before.
+   */
+  async function fetchMarkets(symbols: string[], topRange = drawdownRange) {
+    const wanted = [...new Set([...symbols, "THB=X"])];
+    let markets: Record<string, MarketData> = {};
     try {
+      const url = new URL("/api/market/summary", window.location.origin);
+      url.searchParams.set("symbols", wanted.join(","));
+      url.searchParams.set("drawdownRange", topRange);
       const response = await fetch(url);
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Unable to fetch market data");
-      return payload as MarketData;
+      if (response.ok) markets = payload.markets;
     } catch {
-      return fallbackMarketData(symbolInput, "1y", topRange);
+      // Placeholders below.
     }
+
+    const marketOf = (symbol: string) => markets[symbol] ?? fallbackMarketData(symbol, "1y", topRange);
+    const fx = marketOf("THB=X").price;
+    // Baht cash is counted in the dollar totals at this rate, the same rate a THB cost basis is converted at.
+    setThbPerUsd(fx > 0 ? fx : null);
+    return { marketOf, fx };
   }
 
   async function materializeDefaultPortfolio(seed: PortfolioSeed[], topRange = drawdownRange) {
@@ -204,8 +211,9 @@ export function PortfolioDashboard({
 
     setLoading(true);
     try {
-      const markets = await Promise.all(seed.map((item) => fetchMarket(item.symbol, topRange)));
-      const convertedCostBases = await Promise.all(seed.map((item, index) => convertSeedCostBasis(item, markets[index], topRange)));
+      const { marketOf, fx } = await fetchMarkets(seed.map((item) => item.symbol), topRange);
+      const markets = seed.map((item) => marketOf(item.symbol));
+      const convertedCostBases = seed.map((item, index) => convertSeedCostBasis(item, markets[index], fx));
       const nextHoldings = seed.map((item, index) => createHoldingFromPortfolioSeed(item, markets[index], convertedCostBases[index]));
       const nextRows = nextHoldings.map((holding, index) => enrichHolding(holding, markets[index]));
       skipNextRefresh.current = true;
@@ -224,7 +232,8 @@ export function PortfolioDashboard({
     }
     setLoading(true);
     try {
-      const markets = await Promise.all(nextHoldings.map((holding) => fetchMarket(holding.symbol, topRange)));
+      const { marketOf } = await fetchMarkets(nextHoldings.map((holding) => holding.symbol), topRange);
+      const markets = nextHoldings.map((holding) => marketOf(holding.symbol));
       setRows(nextHoldings.map((holding, index) => enrichHolding(holding, markets[index])));
     } finally {
       setLoading(false);
@@ -382,15 +391,14 @@ export function PortfolioDashboard({
     });
   }
 
-  async function convertSeedCostBasis(seed: PortfolioSeed, market: MarketData, topRange = drawdownRange) {
+  function convertSeedCostBasis(seed: PortfolioSeed, market: MarketData, fx: number) {
     if (!Number.isFinite(seed.costBasis)) return undefined;
 
     const fromCurrency = seed.costCurrency || market.currency;
     if (fromCurrency === market.currency) return seed.costBasis;
 
     if (fromCurrency === "THB" && market.currency === "USD") {
-      const fxMarket = await fetchMarket("THB=X", topRange);
-      return fxMarket.price > 0 ? seed.costBasis! / fxMarket.price : seed.costBasis;
+      return fx > 0 ? seed.costBasis! / fx : seed.costBasis;
     }
 
     return seed.costBasis;
@@ -422,6 +430,15 @@ export function PortfolioDashboard({
     return formatDisplayMoney(value, currency, displayCurrency, usdThbRate?.rate);
   }
 
+  /** The headline cards: six-figure baht reads the same without satang, and then fits the card. */
+  function formatHeadline(value: number) {
+    if (displayCurrency !== "THB" || !usdThbRate) return formatMoney(value);
+    const baht = value * usdThbRate.rate;
+    return Math.abs(baht) >= 10000
+      ? new Intl.NumberFormat("en-US", { style: "currency", currency: "THB", currencyDisplay: "narrowSymbol", maximumFractionDigits: 0 }).format(baht)
+      : formatMoney(value);
+  }
+
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       <section className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
@@ -429,10 +446,10 @@ export function PortfolioDashboard({
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">My Portfolio</p>
           <h1 className="max-w-4xl font-serif text-4xl leading-none sm:text-5xl md:text-7xl">Net worth radar for every position.</h1>
           <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-8 sm:gap-3 sm:[grid-template-columns:repeat(auto-fit,minmax(165px,1fr))]">
-            <Summary title="Net Worth" value={formatMoney(totals.marketValue + cashValue)} />
-            <Summary title="Money In" value={formatMoney(totals.costBasis + cashValue)} />
-            <Summary title="Total P/L" value={`${formatMoney(totals.profitLoss)} ${percentFormat(pnlPercent)}`} tone={totals.profitLoss >= 0 ? "text-mint-signal" : "text-rose-signal"} />
-            <Summary title="Cash" value={formatMoney(cashValue)} hint={`${currencyFormat(cash.USD, "USD")} + ${currencyFormat(cash.THB, "THB")}`} />
+            <Summary title="Net Worth" value={formatHeadline(totals.marketValue + cashValue)} />
+            <Summary title="Money In" value={formatHeadline(totals.costBasis + cashValue)} />
+            <Summary title="Total P/L" value={formatHeadline(totals.profitLoss)} sub={percentFormat(pnlPercent)} tone={totals.profitLoss >= 0 ? "text-mint-signal" : "text-rose-signal"} />
+            <Summary title="Cash" value={formatHeadline(cashValue)} hint={`${currencyFormat(cash.USD, "USD")} + ${currencyFormat(cash.THB, "THB")}`} />
           </div>
         </article>
 
@@ -726,11 +743,13 @@ export function PortfolioDashboard({
   );
 }
 
-function Summary({ title, value, hint, tone = "text-white" }: { title: string; value: string; hint?: string; tone?: string }) {
+function Summary({ title, value, sub, hint, tone = "text-white" }: { title: string; value: string; sub?: string; hint?: string; tone?: string }) {
   return (
     <div className="min-w-0 rounded-2xl border border-white/10 bg-white/5 p-3 sm:p-4">
       <span className="text-xs font-bold uppercase tracking-wide text-slate-400">{title}</span>
-      <strong className={`mt-1 block break-words text-lg font-black sm:mt-2 sm:text-2xl ${tone}`}>{value}</strong>
+      {/* A number broken across lines reads as two numbers, so it stays whole and the type steps down instead. */}
+      <strong className={`mt-1 block truncate whitespace-nowrap text-base font-black tabular-nums sm:mt-2 sm:text-xl xl:text-2xl ${tone}`}>{value}</strong>
+      {sub && <span className={`block text-sm font-black tabular-nums ${tone}`}>{sub}</span>}
       {hint && <small className="mt-1 block truncate text-xs text-slate-500">{hint}</small>}
     </div>
   );

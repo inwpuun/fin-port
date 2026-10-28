@@ -398,6 +398,7 @@ Nothing but `/unlock` and static assets answers without one.
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/market?symbol=&range=&drawdownRange=&overlays=` | quotes, candles and analytics |
+| `GET` | `/api/market/summary?symbols=A,B,C&drawdownRange=` | market data without candles for many symbols in one request (cached a minute); `/portfolio` uses it |
 | `GET` | `/api/market/prices?symbols=A,B,C` | last close for many symbols in one request (cached a minute); `/allocation` uses it |
 | `GET` | `/api/exchange-rate/usd-thb` | BOT reference rate |
 | `GET` `POST` `DELETE` | `/api/watchlist/my-watchlist` | saved symbols |

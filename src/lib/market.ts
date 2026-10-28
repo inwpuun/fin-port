@@ -351,6 +351,30 @@ export async function fetchDailyCloses(symbolInput: string, from: string) {
   return { symbol, currency: result.meta?.currency || "USD", closes };
 }
 
+const SUMMARY_CACHE_MS = 60 * 1000;
+
+declare global {
+  var __finPortSummaries: Map<string, { at: number; value: MarketData }> | undefined;
+}
+
+/**
+ * Everything a holdings table reads -- price, drawdown, signal -- without the
+ * year of candles behind them, which is most of the payload and which a
+ * table never draws. Held for a minute so a reload, or the drawdown picker
+ * flipping back, does not ask Yahoo again.
+ */
+export async function fetchMarketSummary(symbolInput: string, drawdownRange: DrawdownRange = "1y"): Promise<MarketData> {
+  const key = `${normalizeSymbol(symbolInput)}|${drawdownRange}`;
+  const cache = (globalThis.__finPortSummaries ??= new Map());
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < SUMMARY_CACHE_MS) return hit.value;
+
+  const data = await fetchMarketData(symbolInput, "1y", "1d", drawdownRange, false);
+  const value: MarketData = { ...data, candles: [], volume: [] };
+  cache.set(key, { at: Date.now(), value });
+  return value;
+}
+
 export type LatestPrice = { symbol: string; price: number; currency: string };
 
 const PRICE_CACHE_MS = 60 * 1000;

@@ -3,6 +3,8 @@ export function currencyFormat(value: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
+    // "฿550,549.81" rather than "THB 550,549.81": four characters narrower, which is what a card fits.
+    currencyDisplay: "narrowSymbol",
     maximumFractionDigits: Math.abs(value) > 1000 ? 2 : 4
   }).format(value);
 }

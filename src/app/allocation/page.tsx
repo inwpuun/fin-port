@@ -1,4 +1,5 @@
 import { AllocationDashboard } from "@/components/allocation-dashboard";
+import { getUsdThbRateOrNull } from "@/lib/bot-rate";
 import { getMyAllocationRules, getMyCashBalances, getMyPortfolioSeed, getMyTransactions } from "@/lib/my-port";
 
 // Reads live rows from Postgres, so it must render per request. Without
@@ -7,11 +8,12 @@ import { getMyAllocationRules, getMyCashBalances, getMyPortfolioSeed, getMyTrans
 export const dynamic = "force-dynamic";
 
 export default async function AllocationPage() {
-  const [allocationRules, portfolioSeed, cash, transactions] = await Promise.all([
+  const [allocationRules, portfolioSeed, cash, transactions, usdThbRate] = await Promise.all([
     getMyAllocationRules(),
     getMyPortfolioSeed(),
     getMyCashBalances(),
-    getMyTransactions()
+    getMyTransactions(),
+    getUsdThbRateOrNull()
   ]);
 
   return (
@@ -20,6 +22,7 @@ export default async function AllocationPage() {
       portfolioSeed={portfolioSeed}
       cash={cash}
       transactions={transactions}
+      usdThbRate={usdThbRate}
     />
   );
 }

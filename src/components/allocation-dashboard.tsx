@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fallbackMarketData, normalizeSymbol } from "@/lib/market";
 import { currencyFormat } from "@/lib/format";
 import type { AllocationRule, CashBalances, HoldingTransaction, PortfolioSeed } from "@/types/portfolio";
+import type { UsdThbRate } from "@/lib/bot-rate";
 import {
   CASH_SYMBOL,
   HoldingEditorModal,
@@ -14,12 +15,6 @@ import { TransactionModal, type TransactionSave } from "./transaction-modal";
 import { CashModal, type CashSave } from "./cash-modal";
 
 type DisplayCurrency = "USD" | "THB";
-
-type UsdThbRate = {
-  rate: number;
-  period: string;
-  source: string;
-};
 
 type AllocationPosition = {
   category: string;
@@ -43,12 +38,15 @@ export function AllocationDashboard({
   allocationRules: initialAllocationRules,
   portfolioSeed: initialPortfolioSeed,
   cash: initialCash,
-  transactions: initialTransactions
+  transactions: initialTransactions,
+  usdThbRate: initialUsdThbRate = null
 }: {
   allocationRules: AllocationRule[];
   portfolioSeed: PortfolioSeed[];
   cash: CashBalances;
   transactions: HoldingTransaction[];
+  /** BOT rate loaded with the page; when present the page opens in baht. */
+  usdThbRate?: UsdThbRate | null;
 }) {
   const [allocationRules, setAllocationRules] = useState(initialAllocationRules);
   const [portfolioSeed, setPortfolioSeed] = useState(initialPortfolioSeed);
@@ -56,8 +54,8 @@ export function AllocationDashboard({
   const [editorTarget, setEditorTarget] = useState<HoldingEditorTarget | null>(null);
   const [positions, setPositions] = useState<AllocationPosition[]>([]);
   const [loading, setLoading] = useState(false);
-  const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>("USD");
-  const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(null);
+  const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>(initialUsdThbRate ? "THB" : "USD");
+  const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(initialUsdThbRate);
   const [fxLoading, setFxLoading] = useState(false);
   const [fxError, setFxError] = useState("");
   const [cash, setCash] = useState(initialCash);
@@ -563,7 +561,7 @@ function Summary({ title, value, tone = "text-white" }: { title: string; value: 
   return (
     <div className="min-w-0 rounded-2xl border border-white/10 bg-white/5 p-3 sm:p-4">
       <span className="text-xs font-bold uppercase tracking-wide text-slate-400">{title}</span>
-      <strong className={`mt-1 block break-words text-lg font-black sm:mt-2 sm:text-2xl ${tone}`}>{value}</strong>
+      <strong className={`mt-1 block truncate whitespace-nowrap text-base font-black tabular-nums sm:mt-2 sm:text-xl xl:text-2xl ${tone}`}>{value}</strong>
     </div>
   );
 }
