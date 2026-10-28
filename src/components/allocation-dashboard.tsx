@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { fallbackMarketData, normalizeSymbol } from "@/lib/market";
+import { normalizeSymbol } from "@/lib/market";
 import { currencyFormat } from "@/lib/format";
 import type { AllocationRule, CashBalances, HoldingTransaction, PortfolioSeed } from "@/types/portfolio";
 import type { UsdThbRate } from "@/lib/bot-rate";
@@ -54,6 +54,8 @@ export function AllocationDashboard({
   const [editorTarget, setEditorTarget] = useState<HoldingEditorTarget | null>(null);
   const [positions, setPositions] = useState<AllocationPosition[]>([]);
   const [loading, setLoading] = useState(false);
+  // Symbols Yahoo did not price on the last load, valued at cost instead.
+  const [unpriced, setUnpriced] = useState<string[]>([]);
   const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>(initialUsdThbRate ? "THB" : "USD");
   const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(initialUsdThbRate);
   const [fxLoading, setFxLoading] = useState(false);
@@ -150,43 +152,64 @@ export function AllocationDashboard({
   /**
    * Every price the page needs, in one request. This page only multiplies
    * quantity by the last close, so it asks for prices alone rather than a
-   * year of candles and analytics per symbol. A symbol that fails falls back
-   * to the same placeholder price as before.
+   * year of candles and analytics per symbol. Whatever is missing is asked for
+   * once more before the caller falls back to cost.
    */
   async function loadPrices(symbols: string[]) {
     const prices = new Map<string, number>();
-    if (symbols.length) {
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const missing = symbols.filter((symbol) => !prices.has(symbol));
+      if (!missing.length) break;
+
       const url = new URL("/api/market/prices", window.location.origin);
-      url.searchParams.set("symbols", symbols.join(","));
+      url.searchParams.set("symbols", missing.join(","));
       try {
         const response = await fetch(url);
         const payload = await response.json();
-        if (response.ok) {
-          for (const [symbol, quote] of Object.entries(payload.prices as Record<string, { price: number }>)) {
-            prices.set(symbol, quote.price);
-          }
+        if (!response.ok) continue;
+        for (const [symbol, quote] of Object.entries(payload.prices as Record<string, { price: number }>)) {
+          if (quote.price > 0) prices.set(symbol, quote.price);
         }
       } catch {
-        // Fall through to the placeholders below.
+        // Retried once; after that the caller values at cost.
       }
     }
-    return (symbol: string) => prices.get(symbol) ?? fallbackMarketData(symbol, "1y", "1y").price;
+
+    return prices;
   }
 
   async function calculateAllocation() {
     setLoading(true);
     try {
       const seedBySymbol = new Map(portfolioSeed.map((seed) => [normalizeKey(seed.symbol), seed]));
-      const priceOf = await loadPrices([
+      const prices = await loadPrices([
         ...portfolioSeed
           .filter((seed) => !Number.isFinite(seed.marketValue) && Number.isFinite(seed.quantity))
           .map((seed) => seed.symbol),
-        ...(cash.THB ? ["THB=X"] : [])
+        "THB=X"
       ]);
+      // Market rate when Yahoo answers, the BOT rate the page loaded with when it does not.
+      const thbPerUsd = prices.get("THB=X") ?? usdThbRate?.rate;
+      const missed = new Set<string>();
+
+      /**
+       * Quantity times the last close. Without a price, the position's cost
+       * stands in -- a real number for this holding, unlike the synthetic
+       * placeholder this used to fall back to -- and the page says so.
+       */
+      const valueOf = (seed: PortfolioSeed) => {
+        const price = prices.get(seed.symbol);
+        if (price !== undefined) return seed.quantity! * price;
+
+        missed.add(seed.symbol);
+        const cost = seed.costBasis ?? 0;
+        return seed.costCurrency === "THB" ? (thbPerUsd ? cost / thbPerUsd : 0) : cost;
+      };
       const cashInUsd = () => {
         if (!cash.THB) return cash.USD;
-        const rate = priceOf("THB=X");
-        return cash.USD + (rate > 0 ? cash.THB / rate : 0);
+        if (!thbPerUsd) missed.add(CASH_SYMBOL);
+        return cash.USD + (thbPerUsd ? cash.THB / thbPerUsd : 0);
       };
 
       const nextPositions = await Promise.all(
@@ -225,7 +248,7 @@ export function AllocationDashboard({
             return {
               category: rule.category,
               symbol: rule.symbol,
-              value: seed.quantity! * priceOf(seed.symbol),
+              value: valueOf(seed),
               source: "portfolio" as const
             };
           }
@@ -256,7 +279,7 @@ export function AllocationDashboard({
           const value = Number.isFinite(seed.marketValue)
             ? seed.marketValue!
             : Number.isFinite(seed.quantity)
-              ? seed.quantity! * priceOf(seed.symbol)
+              ? valueOf(seed)
               : 0;
 
           return {
@@ -274,6 +297,7 @@ export function AllocationDashboard({
       }
 
       setPositions([...nextPositions, ...unassigned]);
+      setUnpriced([...missed]);
     } finally {
       setLoading(false);
     }
@@ -360,6 +384,11 @@ export function AllocationDashboard({
             </p>
           )}
           {fxError && <p className="mt-3 text-sm text-rose-signal">{fxError}</p>}
+          {unpriced.length > 0 && (
+            <p className="mt-3 text-sm text-amber-signal">
+              No live price for {unpriced.join(", ")}: valued at cost. Refresh allocation to try again.
+            </p>
+          )}
           {missingPositions.length > 0 && (
             <p className="mt-3 text-sm text-amber-signal">
               In an allocation lane but not held: {missingPositions.map((position) => position.symbol).join(", ")}
