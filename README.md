@@ -265,6 +265,25 @@ they stand and records only the difference, dated, so the history knows when
 money arrived. The old single `cash value` on the `CASH` allocation row becomes
 the opening deposit the first time cash is changed.
 
+**THB cash follows the cash book.** Every cash-book import (page, API or
+`npm run db:cash-book`) rebuilds all THB rows on `CASH` from the book
+(`src/lib/cash-book/sync-cash.ts`):
+
+- THB cash is the sum of every account except `Dime Invest` and `BTC`, whose
+  money already shows as positions. Card debt (Ktc) counts against it.
+- It is written as weekly balance steps (note `cash book`), through the last
+  day in the book.
+- Until May 2025 buys were paid for without a recorded transfer into Dime
+  Invest, so on each day whatever the trade log had spent beyond the Dime
+  Invest balance (at that day's USD/THB) is taken off the cash. Without it
+  that money counts twice, as cash and as the stocks it bought.
+- USD cash is not in the book. Its rows are never touched; keep it current
+  with **Update cash**. A THB change made there lasts until the next import.
+
+The rebuild runs in its own transaction after the import, so if it fails (it
+needs Yahoo's USD/THB history) the ledger import still stands and the import
+result says why cash was not updated.
+
 Net Worth on `/portfolio` includes cash; Money In is cost basis plus cash.
 
 To fix a mistyped trade, delete it in the **Transactions** table and record

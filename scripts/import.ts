@@ -14,6 +14,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import type { Client } from "pg";
 import { importCashBook } from "../src/lib/cash-book/import";
+import { describeCashSync, syncCashFromBook } from "../src/lib/cash-book/sync-cash";
 import { importAllocations, importHoldings, importWatchlist } from "../src/lib/seed";
 import { connect, loadEnv, projectRoot } from "./db";
 
@@ -85,6 +86,15 @@ async function cashBook(client: Client, explicit: string[]) {
     console.log(
       `  note  ${report.keyCollisionsResolved} rows shared a natural key and were kept apart by occurrence index.`
     );
+  }
+
+  // A savepoint keeps the ledger import even when the cash rebuild fails.
+  await client.query("savepoint cash_sync");
+  try {
+    console.log(`  ${describeCashSync(await syncCashFromBook(client))}`);
+  } catch (error) {
+    await client.query("rollback to savepoint cash_sync");
+    console.warn(`  warn  cash not updated: ${error instanceof Error ? error.message : error}`);
   }
 }
 

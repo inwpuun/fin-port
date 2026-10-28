@@ -91,7 +91,8 @@ export function CashModal({ cash, category: initialCategory, categories, onClose
           Now <strong className="text-white">{currencyFormat(cash.USD, "USD")}</strong> and{" "}
           <strong className="text-white">{currencyFormat(cash.THB, "THB")}</strong>
           <span className="block text-xs text-slate-500">
-            The difference is saved as a deposit or withdrawal on the date below.
+            The difference is saved as a deposit or withdrawal on the date below. THB is rebuilt from the cash
+            book on every CSV import, so a change here only lasts until the next one.
           </span>
         </p>
 

@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { isAuthorized, unauthorized } from "@/lib/auth";
 import { withTransaction } from "@/lib/db/client";
 import { importCashBook, type SourceFile } from "@/lib/cash-book/import";
+import { syncCashFromBook } from "@/lib/cash-book/sync-cash";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,7 +62,17 @@ export async function POST(request: NextRequest) {
     // One transaction for the whole import: a failure partway through leaves
     // the ledger exactly as it was, rather than with some files applied.
     const report = await withTransaction((client) => importCashBook(client, sources));
-    return Response.json({ ok: true, report });
+
+    // THB cash follows the book. Separate transaction, so a failed rebuild
+    // (no exchange rate from Yahoo) does not undo the import.
+    let cash: unknown;
+    try {
+      cash = await withTransaction((client) => syncCashFromBook(client));
+    } catch (error) {
+      cash = { error: error instanceof Error ? error.message : "Cash rebuild failed" };
+    }
+
+    return Response.json({ ok: true, report, cash });
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "Import failed" },

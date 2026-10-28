@@ -6,6 +6,7 @@ import { adminToken } from "@/lib/env";
 import { SESSION_COOKIE, verifySessionCookie } from "@/lib/session";
 import { withTransaction } from "@/lib/db/client";
 import { importCashBook, type SourceFile } from "@/lib/cash-book/import";
+import { describeCashSync, syncCashFromBook } from "@/lib/cash-book/sync-cash";
 
 async function assertUnlocked() {
   const store = await cookies();
@@ -53,6 +54,17 @@ export async function importCashBookAction(
     const report = await withTransaction((client) => importCashBook(client, sources));
     revalidatePath("/cash-book");
 
+    // Its own transaction: the ledger import stands even if the cash rebuild
+    // cannot reach Yahoo for the exchange rate.
+    let cashLine: string;
+    try {
+      cashLine = describeCashSync(await withTransaction((client) => syncCashFromBook(client)));
+      revalidatePath("/portfolio");
+      revalidatePath("/allocation");
+    } catch (syncError) {
+      cashLine = `Cash not updated: ${syncError instanceof Error ? syncError.message : String(syncError)}`;
+    }
+
     return {
       summary: `${report.transactionsUpserted} transactions and ${report.accountsUpserted} accounts upserted in ${report.durationMs} ms.`,
       details: report.files.map(
@@ -60,7 +72,7 @@ export async function importCashBookAction(
           `${file.name}: ${file.transactions} transactions, ${file.accounts} accounts` +
           (file.skipped ? `, ${file.skipped} unparseable rows skipped` : "") +
           (file.collisions ? `, ${file.collisions} natural-key collisions kept apart` : "")
-      )
+      ).concat(cashLine)
     };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Import failed." };
