@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AreaSeries,
   ColorType,
@@ -30,12 +30,17 @@ const colors = {
 };
 
 type Hover = { point: NetWorthPoint; x: number; width: number };
+type Span = { from: NetWorthPoint; to: NetWorthPoint; fromX: number; toX: number; dragging: boolean };
 
 /**
  * Net worth against money put in, day by day since the first trade. The gap
  * between the two lines is the profit; hovering a day shows both figures and
  * the difference. Values arrive in USD with that day's rate, so switching the
  * page to baht converts each day at its own rate rather than today's.
+ *
+ * Dragging across the chart compares two days: the figures above switch to
+ * before -> after and the change, for net worth, money in and profit. A click
+ * without a drag, Esc, or changing the window clears it.
  */
 export function NetWorthChart({ displayCurrency, version }: { displayCurrency: DisplayCurrency; version: number }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -49,6 +54,8 @@ export function NetWorthChart({ displayCurrency, version }: { displayCurrency: D
   const [error, setError] = useState("");
   const [zoom, setZoom] = useState<Zoom>("ALL");
   const [hover, setHover] = useState<Hover | null>(null);
+  const [span, setSpan] = useState<Span | null>(null);
+  const dragRef = useRef<{ point: NetWorthPoint; x: number } | null>(null);
 
   const points = useMemo(() => history?.points ?? [], [history]);
   const byTime = useMemo(() => new Map(points.map((point) => [point.time, point])), [points]);
@@ -172,8 +179,65 @@ export function NetWorthChart({ displayCurrency, version }: { displayCurrency: D
     applyZoomRef.current();
   }, [points, displayCurrency, zoom]);
 
+  // The shaded band is drawn at pixel positions, which a new window or new data moves.
+  useEffect(() => setSpan(null), [points, zoom]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setSpan(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  /** The day under the pointer; series data is one point per index, so the logical index is the day. */
+  function pointAt(event: PointerEvent<HTMLDivElement>) {
+    const chart = chartRef.current;
+    const container = containerRef.current;
+    if (!chart || !container || !points.length) return null;
+
+    const bounds = container.getBoundingClientRect();
+    const x = Math.min(Math.max(event.clientX - bounds.left, 0), bounds.width);
+    const logical = chart.timeScale().coordinateToLogical(x);
+    if (logical === null) return null;
+
+    const point = points[Math.min(Math.max(Math.round(Number(logical)), 0), points.length - 1)];
+    const snapped = chart.timeScale().timeToCoordinate(point.time as Time);
+    // In the wrapper's coordinates, where the band is drawn: the chart sits inside its padding.
+    return { point, x: (snapped ?? x) + container.offsetLeft };
+  }
+
+  function startSpan(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    const start = pointAt(event);
+    if (!start) return;
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = start;
+    setSpan(null);
+  }
+
+  function moveSpan(event: PointerEvent<HTMLDivElement>) {
+    const start = dragRef.current;
+    if (!start) return;
+    const end = pointAt(event);
+    if (!end || end.point.time === start.point.time) return;
+
+    const [first, second] = end.x >= start.x ? [start, end] : [end, start];
+    setSpan({ from: first.point, to: second.point, fromX: first.x, toX: second.x, dragging: true });
+  }
+
+  function endSpan(event: PointerEvent<HTMLDivElement>) {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    // A click with no drag never set a span, so it also clears the previous one.
+    setSpan((current) => (current ? { ...current, dragging: false } : null));
+  }
+
   const latest = points.at(-1);
   const shown = hover?.point ?? latest;
+  const days = span ? Math.round((Date.parse(span.to.time) - Date.parse(span.from.time)) / (24 * 60 * 60 * 1000)) : 0;
 
   return (
     <section className="glass-panel overflow-hidden rounded-3xl">
@@ -200,6 +264,56 @@ export function NetWorthChart({ displayCurrency, version }: { displayCurrency: D
         </div>
       </div>
 
+      {span ? (
+        <div className="px-4 pt-4 sm:px-6">
+          <div className="mb-2 flex items-center justify-between gap-2 text-sm">
+            <span className="font-bold text-slate-300">
+              {formatDay(span.from.time)} → {formatDay(span.to.time)}
+              <span className="ml-2 whitespace-nowrap text-slate-400">
+                {days} days
+                <span className="hidden sm:inline">{days >= 60 ? ` (~${(days / 30.44).toFixed(1)} months)` : ""}</span>
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setSpan(null)}
+              className="min-h-8 shrink-0 rounded-full border border-white/10 px-3 text-xs font-bold text-slate-400 hover:text-white"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 [&>:first-child]:col-span-2 sm:[&>:first-child]:col-span-1">
+            <Change
+              label="Net worth"
+              before={money(span.from.value, span.from, displayCurrency)}
+              after={money(span.to.value, span.to, displayCurrency)}
+              diff={convert(span.to.value, span.to, displayCurrency) - convert(span.from.value, span.from, displayCurrency)}
+              percent={percentChange(convert(span.from.value, span.from, displayCurrency), convert(span.to.value, span.to, displayCurrency))}
+              currency={displayCurrency}
+            />
+            <Change
+              label="Money in"
+              before={money(span.from.invested, span.from, displayCurrency)}
+              after={money(span.to.invested, span.to, displayCurrency)}
+              diff={convert(span.to.invested, span.to, displayCurrency) - convert(span.from.invested, span.from, displayCurrency)}
+              percent={percentChange(convert(span.from.invested, span.from, displayCurrency), convert(span.to.invested, span.to, displayCurrency))}
+              currency={displayCurrency}
+              neutral
+            />
+            <Change
+              label="Profit"
+              before={`${money(span.from.value - span.from.invested, span.from, displayCurrency)} (${percentFormat(profitPercent(span.from))})`}
+              after={`${money(span.to.value - span.to.invested, span.to, displayCurrency)} (${percentFormat(profitPercent(span.to))})`}
+              diff={
+                convert(span.to.value - span.to.invested, span.to, displayCurrency) -
+                convert(span.from.value - span.from.invested, span.from, displayCurrency)
+              }
+              percentLabel={`${signed(profitPercent(span.to) - profitPercent(span.from))} pts`}
+              currency={displayCurrency}
+            />
+          </div>
+        </div>
+      ) : (
       <div className="grid grid-cols-2 gap-2 px-4 pt-4 sm:grid-cols-3 sm:px-6 [&>:first-child]:col-span-2 sm:[&>:first-child]:col-span-1">
         <Figure label={hover ? formatDay(hover.point.time) : "Net worth"} value={shown ? money(shown.value, shown, displayCurrency) : "—"} tone="text-cyan-signal" />
         <Figure label="Money in" value={shown ? money(shown.invested, shown, displayCurrency) : "—"} />
@@ -210,10 +324,26 @@ export function NetWorthChart({ displayCurrency, version }: { displayCurrency: D
           tone={shown && shown.value >= shown.invested ? "text-mint-signal" : "text-rose-signal"}
         />
       </div>
+      )}
 
-      <div className="relative px-2 pb-2 sm:px-4">
+      <div
+        className="relative cursor-crosshair select-none px-2 pb-2 [touch-action:pan-y] sm:px-4"
+        onPointerDown={startSpan}
+        onPointerMove={moveSpan}
+        onPointerUp={endSpan}
+        onPointerCancel={endSpan}
+      >
         <div ref={containerRef} className="h-[280px] sm:h-[340px]" />
-        {hover && (
+        {span && (
+          <div
+            className="pointer-events-none absolute top-0 bottom-2 border-x border-cyan-signal/60 bg-cyan-signal/10"
+            style={{
+              left: span.fromX,
+              width: Math.max(span.toX - span.fromX, 1)
+            }}
+          />
+        )}
+        {hover && !span?.dragging && (
           <div
             className="pointer-events-none absolute top-3 z-10 hidden w-64 rounded-2xl border border-white/10 bg-[#0b121b]/95 p-3 text-sm shadow-xl sm:block"
             style={{
@@ -286,8 +416,57 @@ function Row({ label, value, color, dashed, tone = "text-white" }: { label: stri
   );
 }
 
+/** Before, after and the change between two days, with the change leading. */
+function Change({
+  label,
+  before,
+  after,
+  diff,
+  percent,
+  percentLabel,
+  currency,
+  neutral
+}: {
+  label: string;
+  before: string;
+  after: string;
+  diff: number;
+  percent?: number;
+  percentLabel?: string;
+  currency: DisplayCurrency;
+  neutral?: boolean;
+}) {
+  const tone = neutral ? "text-white" : diff >= 0 ? "text-mint-signal" : "text-rose-signal";
+  return (
+    <div className="min-w-0 rounded-2xl border border-white/10 bg-white/5 p-3">
+      <span className="block truncate text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</span>
+      <strong className={`mt-1 block truncate text-base font-black tabular-nums sm:text-lg ${tone}`}>
+        {(diff >= 0 ? "+" : "") + currencyFormat(diff, currency)}
+        <span className="block text-xs sm:ml-2 sm:inline sm:text-sm">
+          {percentLabel ?? (percent === undefined ? "" : percentFormat(percent))}
+        </span>
+      </strong>
+      <span className="mt-1 block text-xs tabular-nums text-slate-400">
+        {before} → {after}
+      </span>
+    </div>
+  );
+}
+
+function convert(amount: number, point: NetWorthPoint, currency: DisplayCurrency) {
+  return currency === "THB" ? amount * point.fx : amount;
+}
+
 function money(amount: number, point: NetWorthPoint, currency: DisplayCurrency) {
-  return currencyFormat(currency === "THB" ? amount * point.fx : amount, currency);
+  return currencyFormat(convert(amount, point, currency), currency);
+}
+
+function percentChange(before: number, after: number) {
+  return before ? ((after - before) / Math.abs(before)) * 100 : 0;
+}
+
+function signed(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
 }
 
 /** Against cost alone, like Total P/L above: cash earns nothing and would dilute it. */
