@@ -16,6 +16,7 @@
     "db:seed": "tsx scripts/import.ts seed",
     "db:cash-book": "tsx scripts/import.ts cash-book",
     "db:import": "tsx scripts/import.ts all",
+    "db:trades": "tsx scripts/import-trades.ts",
     "db:verify": "tsx scripts/verify-parse.ts",
     "check:analytics": "tsx scripts/check-analytics.ts"
   },

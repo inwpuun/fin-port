@@ -4,16 +4,21 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createHoldingFromPortfolioSeed, enrichHolding } from "@/lib/portfolio";
 import { drawdownRanges, fallbackMarketData, normalizeSymbol } from "@/lib/market";
 import { currencyFormat, percentFormat } from "@/lib/format";
-import type { AllocationRule, Holding, HoldingWithMarket, PortfolioSeed } from "@/types/portfolio";
+import type { AllocationRule, CashBalances, Holding, HoldingTransaction, HoldingWithMarket, PortfolioSeed } from "@/types/portfolio";
 import type { DrawdownRange, MarketData } from "@/types/market";
 import { SymbolChartModal } from "./symbol-chart-modal";
 import { SignalCell } from "./market-analysis";
 import { CardStat, MobileSortBar } from "./mobile-sort";
 import {
+  CASH_SYMBOL,
   HoldingEditorModal,
   type HoldingEditorSave,
   type HoldingEditorTarget
 } from "./holding-editor-modal";
+import { TransactionModal, type TransactionKind, type TransactionSave } from "./transaction-modal";
+import { CashModal, type CashSave } from "./cash-modal";
+import { NetWorthChart } from "./net-worth-chart";
+import { TransactionsTable } from "./transactions-table";
 
 type SortKey = "symbol" | "quantity" | "buyPrice" | "currentPrice" | "marketValue" | "profitLoss" | "drawdownPercent" | "signal";
 type SortDirection = "asc" | "desc";
@@ -55,10 +60,14 @@ const sortableColumns: Array<{ key: SortKey; label: string }> = [
 
 export function PortfolioDashboard({
   defaultPortfolio,
-  allocationRules: initialAllocationRules = []
+  allocationRules: initialAllocationRules = [],
+  transactions: initialTransactions = [],
+  cash: initialCash = { USD: 0, THB: 0 }
 }: {
   defaultPortfolio: PortfolioSeed[];
   allocationRules?: AllocationRule[];
+  transactions?: HoldingTransaction[];
+  cash?: CashBalances;
 }) {
   const [portfolioSeed, setPortfolioSeed] = useState(defaultPortfolio);
   const [allocationRules, setAllocationRules] = useState(initialAllocationRules);
@@ -82,6 +91,13 @@ export function PortfolioDashboard({
   const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(null);
   const [fxLoading, setFxLoading] = useState(false);
   const [fxError, setFxError] = useState("");
+  const [transactions, setTransactions] = useState(initialTransactions);
+  const [cash, setCash] = useState(initialCash);
+  const [thbPerUsd, setThbPerUsd] = useState<number | null>(null);
+  const [tradeTarget, setTradeTarget] = useState<{ kind: TransactionKind; symbol: string } | null>(null);
+  const [cashOpen, setCashOpen] = useState(false);
+  // Bumped after every write so the history chart replays the new log.
+  const [historyVersion, setHistoryVersion] = useState(0);
   const skipNextRefresh = useRef(false);
 
   useEffect(() => {
@@ -106,6 +122,9 @@ export function PortfolioDashboard({
     }
 
     materializeDefaultPortfolio(portfolioSeed, drawdownRange);
+    // Baht cash is counted in the dollar totals at the market rate, the same
+    // rate a THB cost basis is converted at below.
+    fetchMarket("THB=X").then((market) => setThbPerUsd(market.price > 0 ? market.price : null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -131,6 +150,17 @@ export function PortfolioDashboard({
   }, [rows]);
 
   const pnlPercent = totals.costBasis ? (totals.profitLoss / totals.costBasis) * 100 : 0;
+  const cashValue = cash.USD + (thbPerUsd ? cash.THB / thbPerUsd : 0);
+
+  const tradedSymbols = useMemo(
+    () =>
+      new Set(
+        transactions
+          .filter((transaction) => transaction.side === "buy" || transaction.side === "sell")
+          .map((transaction) => normalizeSymbol(transaction.symbol))
+      ),
+    [transactions]
+  );
   const drawdownBreaches = rows.filter((row) => Math.abs(row.drawdownPercent) >= Number(drawdownLimit || 0));
   const drawdownRangeLabel = drawdownRanges.find((item) => item.value === drawdownRange)?.label || "1 year";
   const sortedRows = useMemo(() => {
@@ -266,7 +296,8 @@ export function PortfolioDashboard({
             quantity: row.quantity,
             buyPrice: row.buyPrice,
             costCurrency: row.currency,
-            category: categoryBySymbol.get(normalizeSymbol(row.symbol)) ?? ""
+            category: categoryBySymbol.get(normalizeSymbol(row.symbol)) ?? "",
+            tradeManaged: tradedSymbols.has(normalizeSymbol(row.symbol))
           }
         : null
     );
@@ -283,7 +314,25 @@ export function PortfolioDashboard({
     }
   }
 
+  function onTransactionSaved(result: TransactionSave | CashSave) {
+    setTransactions(result.transactions);
+    setCash(result.cash);
+    if (result.allocationRules) setAllocationRules(result.allocationRules);
+    if ("portfolio" in result && result.portfolio) {
+      setPortfolioSeed(result.portfolio);
+      materializeDefaultPortfolio(result.portfolio, drawdownRange);
+    }
+    setHistoryVersion((current) => current + 1);
+  }
+
   async function removeHolding(symbolToRemove: string) {
+    if (
+      tradedSymbols.has(normalizeSymbol(symbolToRemove)) &&
+      !window.confirm(`Remove ${symbolToRemove} and delete all of its transactions? To close the position and keep its history, record a sell instead.`)
+    ) {
+      return;
+    }
+
     setRemovingSymbol(symbolToRemove);
     setAddError("");
 
@@ -303,6 +352,10 @@ export function PortfolioDashboard({
       const { portfolio, allocationRules: nextRules } = payload as PortfolioDeleteResponse;
       if (nextRules) setAllocationRules(nextRules);
       const removedKey = normalizeSymbol(symbolToRemove);
+      setTransactions((current) =>
+        current.filter((transaction) => normalizeSymbol(transaction.symbol) !== removedKey || transaction.side === "deposit" || transaction.side === "withdraw")
+      );
+      setHistoryVersion((current) => current + 1);
 
       skipNextRefresh.current = true;
       setPortfolioSeed(portfolio);
@@ -375,10 +428,11 @@ export function PortfolioDashboard({
         <article className="glass-panel overflow-hidden rounded-3xl p-4 sm:p-6">
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">My Portfolio</p>
           <h1 className="max-w-4xl font-serif text-4xl leading-none sm:text-5xl md:text-7xl">Net worth radar for every position.</h1>
-          <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-8 sm:gap-3 sm:[grid-template-columns:repeat(auto-fit,minmax(200px,1fr))] [&>:last-child:nth-child(odd)]:col-span-2 sm:[&>:last-child:nth-child(odd)]:col-span-1">
-            <Summary title="Net Worth" value={formatMoney(totals.marketValue)} />
-            <Summary title="Cost Basis" value={formatMoney(totals.costBasis)} />
+          <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-8 sm:gap-3 sm:[grid-template-columns:repeat(auto-fit,minmax(165px,1fr))]">
+            <Summary title="Net Worth" value={formatMoney(totals.marketValue + cashValue)} />
+            <Summary title="Money In" value={formatMoney(totals.costBasis + cashValue)} />
             <Summary title="Total P/L" value={`${formatMoney(totals.profitLoss)} ${percentFormat(pnlPercent)}`} tone={totals.profitLoss >= 0 ? "text-mint-signal" : "text-rose-signal"} />
+            <Summary title="Cash" value={formatMoney(cashValue)} hint={`${currencyFormat(cash.USD, "USD")} + ${currencyFormat(cash.THB, "THB")}`} />
           </div>
         </article>
 
@@ -416,19 +470,30 @@ export function PortfolioDashboard({
         </section>
       </section>
 
+      <NetWorthChart displayCurrency={displayCurrency} version={historyVersion} />
+
       <section className="grid gap-4 xl:grid-cols-[390px_1fr]">
         <section className="glass-panel rounded-3xl p-4 sm:p-6">
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Holding Input</p>
-          <h2 className="mb-4 text-2xl font-black">Add stock to portfolio</h2>
-          <button
-            type="button"
-            onClick={() => openEditor()}
-            className="mb-4 min-h-12 w-full rounded-2xl bg-gradient-to-r from-white to-[#8af5d6] font-black text-[#05110e]"
-          >
-            Add by quantity and buy price
-          </button>
+          <h2 className="mb-4 text-2xl font-black">Record a transaction</h2>
+          <div className="mb-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setTradeTarget({ kind: "buy", symbol: "" })}
+              className="min-h-12 rounded-2xl bg-gradient-to-r from-white to-[#8af5d6] font-black text-[#05110e]"
+            >
+              Buy / sell
+            </button>
+            <button
+              type="button"
+              onClick={() => setCashOpen(true)}
+              className="min-h-12 rounded-2xl border border-cyan-signal/30 bg-cyan-signal/10 font-black text-cyan-signal hover:text-white"
+            >
+              Update cash
+            </button>
+          </div>
           <p className="mb-4 text-xs font-bold uppercase tracking-wide text-slate-500">
-            or enter a holding value
+            or add a position by holding value, without history
           </p>
           <form onSubmit={addHolding} className="grid gap-3">
             <label className="field-shell grid gap-1 rounded-2xl px-4 py-3">
@@ -514,6 +579,13 @@ export function PortfolioDashboard({
                     <div className="flex shrink-0 items-center gap-2">
                       <button
                         type="button"
+                        onClick={() => setTradeTarget({ kind: "buy", symbol: row.symbol })}
+                        className="min-h-9 rounded-full bg-white px-3 text-sm font-black text-[#05110e]"
+                      >
+                        Trade
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => openEditor(row)}
                         className="min-h-9 rounded-full border border-cyan-signal/30 bg-cyan-signal/10 px-3 text-sm font-bold text-cyan-signal"
                       >
@@ -590,6 +662,13 @@ export function PortfolioDashboard({
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
+                          onClick={() => setTradeTarget({ kind: "buy", symbol: row.symbol })}
+                          className="rounded-full bg-white px-3 py-1 text-sm font-black text-[#05110e] transition hover:bg-cyan-signal"
+                        >
+                          Trade
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => openEditor(row)}
                           className="rounded-full border border-cyan-signal/30 bg-cyan-signal/10 px-3 py-1 text-sm font-bold text-cyan-signal transition hover:text-white"
                         >
@@ -611,6 +690,27 @@ export function PortfolioDashboard({
           </div>
         </section>
       </section>
+      <TransactionsTable transactions={transactions} onChanged={onTransactionSaved} />
+      {tradeTarget && (
+        <TransactionModal
+          initialKind={tradeTarget.kind}
+          initialSymbol={tradeTarget.symbol}
+          portfolio={portfolioSeed}
+          categories={categories}
+          cash={cash}
+          onClose={() => setTradeTarget(null)}
+          onSaved={onTransactionSaved}
+        />
+      )}
+      {cashOpen && (
+        <CashModal
+          cash={cash}
+          category={allocationRules.find((rule) => rule.symbol.toUpperCase() === CASH_SYMBOL)?.category ?? ""}
+          categories={categories}
+          onClose={() => setCashOpen(false)}
+          onSaved={onTransactionSaved}
+        />
+      )}
       {editorOpen && (
         <HoldingEditorModal
           target={editorTarget}
@@ -626,11 +726,12 @@ export function PortfolioDashboard({
   );
 }
 
-function Summary({ title, value, tone = "text-white" }: { title: string; value: string; tone?: string }) {
+function Summary({ title, value, hint, tone = "text-white" }: { title: string; value: string; hint?: string; tone?: string }) {
   return (
     <div className="min-w-0 rounded-2xl border border-white/10 bg-white/5 p-3 sm:p-4">
       <span className="text-xs font-bold uppercase tracking-wide text-slate-400">{title}</span>
       <strong className={`mt-1 block break-words text-lg font-black sm:mt-2 sm:text-2xl ${tone}`}>{value}</strong>
+      {hint && <small className="mt-1 block truncate text-xs text-slate-500">{hint}</small>}
     </div>
   );
 }

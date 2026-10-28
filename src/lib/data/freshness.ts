@@ -16,13 +16,15 @@ export type Freshness = {
   allocations: string | null;
   watchlist: string | null;
   cashBook: string | null;
+  trades: string | null;
 };
 
 export const emptyFreshness: Freshness = {
   holdings: null,
   allocations: null,
   watchlist: null,
-  cashBook: null
+  cashBook: null,
+  trades: null
 };
 
 /**
@@ -44,12 +46,14 @@ async function latest(table: string): Promise<string | null> {
 }
 
 export async function getDataFreshness(): Promise<Freshness> {
-  const [holdings, allocations, watchlist, cashBook] = await Promise.all([
+  const [holdings, allocations, watchlist, cashBook, trades] = await Promise.all([
     latest("holdings"),
     latest("allocations"),
     latest("watchlist"),
-    latest("cash_transactions")
+    latest("cash_transactions"),
+    // A deposit changes cash without touching holdings or allocations.
+    latest("holding_transactions")
   ]);
 
-  return { holdings, allocations, watchlist, cashBook };
+  return { holdings, allocations, watchlist, cashBook, trades };
 }

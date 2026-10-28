@@ -1,15 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { fallbackMarketData } from "@/lib/market";
+import { fallbackMarketData, normalizeSymbol } from "@/lib/market";
 import { currencyFormat } from "@/lib/format";
 import type { MarketData } from "@/types/market";
-import type { AllocationRule, PortfolioSeed } from "@/types/portfolio";
+import type { AllocationRule, CashBalances, HoldingTransaction, PortfolioSeed } from "@/types/portfolio";
 import {
+  CASH_SYMBOL,
   HoldingEditorModal,
   type HoldingEditorSave,
   type HoldingEditorTarget
 } from "./holding-editor-modal";
+import { TransactionModal, type TransactionSave } from "./transaction-modal";
+import { CashModal, type CashSave } from "./cash-modal";
 
 type DisplayCurrency = "USD" | "THB";
 
@@ -39,10 +42,14 @@ const groupColors = ["#52d6ff", "#14ce99", "#ffcc66", "#ff5278", "#a78bfa", "#38
 
 export function AllocationDashboard({
   allocationRules: initialAllocationRules,
-  portfolioSeed: initialPortfolioSeed
+  portfolioSeed: initialPortfolioSeed,
+  cash: initialCash,
+  transactions: initialTransactions
 }: {
   allocationRules: AllocationRule[];
   portfolioSeed: PortfolioSeed[];
+  cash: CashBalances;
+  transactions: HoldingTransaction[];
 }) {
   const [allocationRules, setAllocationRules] = useState(initialAllocationRules);
   const [portfolioSeed, setPortfolioSeed] = useState(initialPortfolioSeed);
@@ -54,11 +61,15 @@ export function AllocationDashboard({
   const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(null);
   const [fxLoading, setFxLoading] = useState(false);
   const [fxError, setFxError] = useState("");
+  const [cash, setCash] = useState(initialCash);
+  const [transactions, setTransactions] = useState(initialTransactions);
+  const [tradeOpen, setTradeOpen] = useState(false);
+  const [cashOpen, setCashOpen] = useState(false);
 
   useEffect(() => {
     calculateAllocation();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allocationRules, portfolioSeed]);
+  }, [allocationRules, portfolioSeed, cash]);
 
   const groups = useMemo(() => {
     const byCategory = new Map<string, AllocationGroup>();
@@ -86,15 +97,27 @@ export function AllocationDashboard({
   const missingPositions = positions.filter((position) => position.source === "missing");
   const unassignedPositions = positions.filter((position) => position.source === "unassigned");
 
+  const tradedSymbols = useMemo(
+    () =>
+      new Set(
+        transactions
+          .filter((transaction) => transaction.side === "buy" || transaction.side === "sell")
+          .map((transaction) => normalizeSymbol(transaction.symbol))
+      ),
+    [transactions]
+  );
+
   const categories = useMemo(
     () => [...new Set(allocationRules.map((rule) => rule.category))].sort(),
     [allocationRules]
   );
 
   function openEditor(position: AllocationPosition) {
-    const rule = allocationRules.find(
-      (item) => normalizeKey(item.symbol) === normalizeKey(position.symbol)
-    );
+    if (normalizeKey(position.symbol) === CASH_SYMBOL) {
+      setCashOpen(true);
+      return;
+    }
+
     const seed = portfolioSeed.find(
       (item) => normalizeKey(item.symbol) === normalizeKey(position.symbol)
     );
@@ -110,8 +133,7 @@ export function AllocationDashboard({
       // Blank for the placeholder lane, so saving cannot create a literal
       // "Unassigned" category in the database.
       category: position.category === UNASSIGNED_CATEGORY ? "" : position.category,
-      cashValue: rule?.cashValue,
-      cashCurrency: rule?.cashCurrency || "THB"
+      tradeManaged: tradedSymbols.has(normalizeSymbol(position.symbol))
     });
     setEditorOpen(true);
   }
@@ -119,6 +141,13 @@ export function AllocationDashboard({
   function onEditorSaved(result: HoldingEditorSave) {
     if (result.allocationRules) setAllocationRules(result.allocationRules);
     if (result.portfolio) setPortfolioSeed(result.portfolio);
+  }
+
+  function onTransactionSaved(result: TransactionSave | CashSave) {
+    setCash(result.cash);
+    setTransactions(result.transactions);
+    if (result.allocationRules) setAllocationRules(result.allocationRules);
+    if ("portfolio" in result && result.portfolio) setPortfolioSeed(result.portfolio);
   }
 
   async function fetchMarket(symbolInput: string) {
@@ -142,9 +171,8 @@ export function AllocationDashboard({
       const seedBySymbol = new Map(portfolioSeed.map((seed) => [normalizeKey(seed.symbol), seed]));
       const nextPositions = await Promise.all(
         allocationRules.map(async (rule) => {
-          if (normalizeKey(rule.symbol) === "CASH") {
-            const cashCurrency = rule.cashCurrency || "USD";
-            const cashValue = await normalizeCashValue(rule.cashValue ?? 0, cashCurrency);
+          if (normalizeKey(rule.symbol) === CASH_SYMBOL) {
+            const cashValue = await cashInUsd();
 
             return {
               category: rule.category,
@@ -221,6 +249,11 @@ export function AllocationDashboard({
         })
       );
 
+      // Cash with no lane still belongs in the total, like any unruled holding.
+      if (!ruled.has(CASH_SYMBOL) && (cash.USD > 0 || cash.THB > 0)) {
+        unassigned.push({ category: UNASSIGNED_CATEGORY, symbol: CASH_SYMBOL, value: await cashInUsd(), source: "unassigned" as const });
+      }
+
       setPositions([...nextPositions, ...unassigned]);
     } finally {
       setLoading(false);
@@ -257,15 +290,11 @@ export function AllocationDashboard({
     return currencyFormat(value);
   }
 
-  async function normalizeCashValue(value: number, currency: string) {
-    if (currency === "USD") return value;
-
-    if (currency === "THB") {
-      const fxMarket = await fetchMarket("THB=X");
-      return fxMarket.price > 0 ? value / fxMarket.price : value;
-    }
-
-    return value;
+  /** Both balances in dollars, baht converted at the market rate. */
+  async function cashInUsd() {
+    if (!cash.THB) return cash.USD;
+    const fxMarket = await fetchMarket("THB=X");
+    return cash.USD + (fxMarket.price > 0 ? cash.THB / fxMarket.price : 0);
   }
 
   return (
@@ -285,6 +314,26 @@ export function AllocationDashboard({
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Allocation Lanes</p>
           <h2 className="mb-4 text-2xl font-black">Controls</h2>
           <div className="grid gap-3">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setTradeOpen(true)}
+                className="min-h-12 rounded-2xl bg-gradient-to-r from-white to-[#8af5d6] font-black text-[#05110e]"
+              >
+                Buy / sell
+              </button>
+              <button
+                type="button"
+                onClick={() => setCashOpen(true)}
+                className="min-h-12 rounded-2xl border border-cyan-signal/30 bg-cyan-signal/10 font-black text-cyan-signal hover:text-white"
+              >
+                Update cash
+              </button>
+            </div>
+            <p className="text-sm text-slate-400">
+              Cash <strong className="text-white">{currencyFormat(cash.USD, "USD")}</strong> and{" "}
+              <strong className="text-white">{currencyFormat(cash.THB, "THB")}</strong>
+            </p>
             <button type="button" onClick={calculateAllocation} className="min-h-12 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 font-bold text-slate-300 hover:text-white">
               {loading ? "Refreshing..." : "Refresh allocation"}
             </button>
@@ -465,6 +514,24 @@ export function AllocationDashboard({
           </div>
         </section>
       </section>
+      {tradeOpen && (
+        <TransactionModal
+          portfolio={portfolioSeed}
+          categories={categories}
+          cash={cash}
+          onClose={() => setTradeOpen(false)}
+          onSaved={onTransactionSaved}
+        />
+      )}
+      {cashOpen && (
+        <CashModal
+          cash={cash}
+          category={allocationRules.find((rule) => normalizeKey(rule.symbol) === CASH_SYMBOL)?.category ?? ""}
+          categories={categories}
+          onClose={() => setCashOpen(false)}
+          onSaved={onTransactionSaved}
+        />
+      )}
       {editorOpen && (
         <HoldingEditorModal
           target={editorTarget}

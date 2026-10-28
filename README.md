@@ -30,7 +30,7 @@ Open `http://localhost:3000` and unlock with your `ADMIN_TOKEN`.
 ## Pages
 
 - `/` market watch with a TradingView-style chart readable through three lenses, a metrics panel per lens, a composite read, and the watchlist
-- `/portfolio` holdings tracker with calculated buy price, quantity, live market value, total net worth, P/L, and drawdown flags
+- `/portfolio` holdings tracker with calculated buy price, quantity, live market value, total net worth, P/L, drawdown flags, a net-worth-over-time chart, and the trade log
 - `/watchlist` watchlist tracker with live prices, one-year moves, drawdown flags, and a signal column
 - `/allocation` allocation chart and category table
 - `/cash-book` ledger with per-year overview, category and description breakdowns, graphs, transaction modals, and CSV import
@@ -243,11 +243,72 @@ Compose had to bind-mount `./public`. That bind mount is gone.
 `cost basis` + `cost currency` for positions such as bitcoin bought in THB.
 Cost basis is the **total** paid, not a unit price.
 
+## Transactions and cash
+
+Positions change through trades. **Buy / sell** on `/portfolio` or
+`/allocation` (or **Trade** on a holdings row) records a buy or sell with its
+quantity, unit price, optional fee and date into `holding_transactions`. That
+symbol's `holdings` row is then rebuilt by replaying all of its trades in date
+order. A sell removes its share of the cost at the average price, so the buy
+price shown on the table is unchanged by selling. A sell larger than what was
+held on that date is rejected, and so is mixing USD and THB trades on one
+symbol. A sell that closes the position removes the holding and its lane.
+
+The first trade on a symbol that already has a hand-entered holding (GOLD, BTC)
+first copies that holding into the log as an `opening balance` buy at its
+average cost. Without that step the new trade would replace the holding.
+Delete the opening row and record the real buys if you have them.
+
+Cash is two balances, USD and THB, stored in the same log as `deposit` and
+`withdraw` rows on the `CASH` symbol. **Update cash** takes both balances as
+they stand and records only the difference, dated, so the history knows when
+money arrived. The old single `cash value` on the `CASH` allocation row becomes
+the opening deposit the first time cash is changed.
+
+Net Worth on `/portfolio` includes cash; Money In is cost basis plus cash.
+
+To fix a mistyped trade, delete it in the **Transactions** table and record
+it again; the position is rebuilt from what remains.
+
+### Importing the trade sheet
+
+The `fin-port` sheet has one trade per row: `symbol, side, price, quantity,
+date`, with Thai short dates (`3/10/69` = 3 Oct 2026). Import it with:
+
+```sh
+npm run db:trades -- "https://docs.google.com/spreadsheets/d/<id>/gviz/tq?tqx=out:csv&sheet=fin-port" --dry-run
+npm run db:trades -- "https://docs.google.com/spreadsheets/d/<id>/gviz/tq?tqx=out:csv&sheet=fin-port"
+```
+
+`--dry-run` prints each affected holding before and after, then rolls back.
+Every row an earlier import wrote (note `sheet import`) is replaced, so
+correcting the sheet and re-running fixes it in place; trades added in the app
+are kept. Selling "everything" may come out a unit in the 7th decimal above
+the sum of the buys, because brokers round each fill separately. A sell within
+1e-6 of the position is treated as closing it.
+
+## Net worth over time
+
+`/api/portfolio/history` replays the trade log day by day against Yahoo daily
+closes and the USD/THB rate (`THB=X`). Nothing is stored, so a corrected trade
+redraws the whole curve. The chart draws two lines: net worth (holdings plus
+cash) and money in (cost basis plus cash). The gap between them is profit, and
+hovering a day shows all three. Profit % is measured against cost only, as on
+the Total P/L card. In THB, each day converts at that day's rate.
+
+Yahoo's closes are split-adjusted, but the log records what was actually
+traded, so each close is scaled back to that day's real price (NVDA traded at
+$795 before its 10:1 split in June 2024, not the adjusted $79).
+
+A holding with no trades has no history to replay. It enters the chart at
+cost on the day its row was created, which shows as a step in both lines, and
+the chart names it. Record its real buys to remove the step.
+
 ## Editing a position
 
-`/portfolio` and `/allocation` share one editor (`holding-editor-modal.tsx`).
-Open it from **Add by quantity and buy price** on `/portfolio`, or the **Edit**
-button on any row of either page.
+`/portfolio` and `/allocation` share one editor (`holding-editor-modal.tsx`),
+opened from the **Edit** button on any row of either page. For a symbol with
+trades it changes only the allocation lane; the quantity comes from the log.
 
 It takes a quantity and a per-unit buy price and stores their product as the
 cost basis, alongside the allocation category. Entering the position this way
@@ -260,8 +321,7 @@ A symbol belongs to exactly one lane. Because `allocations` is keyed on
 it would be counted in two lanes and inflate the total. Deleting a holding also
 clears its lane, so no symbol is left behind with no value against it.
 
-For the `CASH` pseudo-symbol the editor swaps quantity and price for a cash
-balance and currency, and writes through `/api/allocation`.
+The `CASH` row opens the cash form instead (see Transactions and cash).
 
 ## Cash-book import
 
@@ -321,7 +381,10 @@ Nothing but `/unlock` and static assets answers without one.
 | `GET` | `/api/market?symbol=&range=&drawdownRange=&overlays=` | quotes, candles and analytics |
 | `GET` | `/api/exchange-rate/usd-thb` | BOT reference rate |
 | `GET` `POST` `DELETE` | `/api/watchlist/my-watchlist` | saved symbols |
-| `POST` `DELETE` | `/api/portfolio/my-port` | required | upsert or remove a holding, and its allocation lane |
+| `POST` `DELETE` | `/api/portfolio/my-port` | required | upsert or remove a holding, and its allocation lane (remove also deletes its trades) |
+| `GET` `POST` `DELETE` | `/api/portfolio/transactions` | required | list, record (`side`: buy, sell, deposit, withdraw) or delete (`?id=`) a transaction |
+| `POST` | `/api/portfolio/cash` | required | set the USD and THB cash balances |
+| `GET` | `/api/portfolio/history` | required | daily net worth and money in since the first trade |
 | `GET` `POST` `DELETE` | `/api/allocation` | required | move a symbol between lanes, edit the cash balance |
 | `POST` | `/api/cash-book/import` | required | CSV upsert |
 

@@ -1,8 +1,9 @@
 import "server-only";
-import { query, withTransaction } from "@/lib/db/client";
+import { db, query, withTransaction } from "@/lib/db/client";
 import { num } from "@/lib/db/sql";
 import { normalizeSymbol } from "@/lib/market";
-import type { AllocationRule, PortfolioSeed } from "@/types/portfolio";
+import { getCashBalances, listTransactions } from "@/lib/trades";
+import type { AllocationRule, CashBalances, HoldingTransaction, PortfolioSeed } from "@/types/portfolio";
 
 /**
  * Portfolio storage. The exported surface is unchanged from the CSV version,
@@ -283,4 +284,23 @@ function portfolioSymbolKey(symbol: string) {
 function roundTo(value: number, decimalPlaces: number) {
   const factor = 10 ** decimalPlaces;
   return Math.round((value + Number.EPSILON) * factor) / factor;
+}
+
+/** The whole trade log, newest first, for the transactions table. */
+export async function getMyTransactions(): Promise<HoldingTransaction[]> {
+  try {
+    return (await listTransactions(db())).reverse();
+  } catch (error) {
+    console.error("getMyTransactions failed:", error);
+    return [];
+  }
+}
+
+export async function getMyCashBalances(): Promise<CashBalances> {
+  try {
+    return await getCashBalances(db());
+  } catch (error) {
+    console.error("getMyCashBalances failed:", error);
+    return { USD: 0, THB: 0 };
+  }
 }

@@ -7,9 +7,12 @@ import {
   deleteMyAllocationRule,
   deleteMyPortfolioSeed,
   getMyAllocationRules,
+  getMyPortfolioSeed,
   upsertMyAllocationRule,
   upsertMyPortfolioSeed
 } from "@/lib/my-port";
+import { db, withTransaction } from "@/lib/db/client";
+import { deletePositionTrades, hasPositionTrades } from "@/lib/trades";
 import type { MarketData } from "@/types/market";
 
 export const runtime = "nodejs";
@@ -33,6 +36,21 @@ export async function POST(request: NextRequest) {
   // category name -- "Software" and "SOFTWARE" would become two lanes.
   const category = readRawStringField(body, "category");
   if (!stock) return errorResponse("Stock is required");
+
+  // A position with a trade log is the sum of its trades; overwriting the
+  // holdings row would be undone by the next trade. Only its lane can change.
+  if (await hasPositionTrades(db(), stock)) {
+    if (!category) {
+      return errorResponse(`${stock} is built from its transactions. Record a buy or sell to change it.`);
+    }
+    try {
+      const allocationRules = await upsertMyAllocationRule({ category, symbol: stock });
+      const portfolio = await getMyPortfolioSeed();
+      return NextResponse.json({ portfolio, allocationRules }, { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      return errorResponse(error instanceof Error ? error.message : "Unable to update the allocation", 500);
+    }
+  }
 
   // Two ways to describe a position. Quantity + buy price is exact and needs
   // no quote, so it is tried first; holding value + % profit has to be priced
@@ -134,6 +152,9 @@ export async function DELETE(request: NextRequest) {
   if (!stock) return errorResponse("Stock is required");
 
   try {
+    // The trades go too: left behind, the next trade on this symbol would
+    // replay them and bring the removed position back.
+    await withTransaction((client) => deletePositionTrades(client, stock));
     const portfolio = await deleteMyPortfolioSeed(stock);
     // Otherwise the symbol lingers in its allocation lane as a "missing"
     // position with no value behind it.

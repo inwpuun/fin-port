@@ -27,6 +27,9 @@ type YahooChartResult = {
     }>;
     adjclose?: Array<{ adjclose?: Array<number | null> }>;
   };
+  events?: {
+    splits?: Record<string, { date: number; numerator: number; denominator: number }>;
+  };
 };
 
 const aliases = new Map<string, string>([
@@ -292,6 +295,60 @@ export async function fetchMarketData(
   }
 
   return buildMarketData(result, symbol, range, drawdownRange, includeOverlays);
+}
+
+/**
+ * Daily closes from `from` (YYYY-MM-DD) to today, keyed by date, for the
+ * net-worth history. Asks Yahoo for an explicit window rather than a named
+ * range, because the history starts on the first trade, not N months ago.
+ *
+ * Yahoo's closes are split-adjusted, but a trade log records the price and
+ * quantity actually traded. Valuing February 2024's 0.17 NVDA at the adjusted
+ * $79 instead of the $795 it traded at understates it tenfold until the June
+ * 2024 split, so each close is scaled back to the price that day.
+ */
+export async function fetchDailyCloses(symbolInput: string, from: string) {
+  const symbol = normalizeSymbol(symbolInput);
+  const yahooUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`);
+  yahooUrl.searchParams.set("period1", String(Math.floor(new Date(`${from}T00:00:00Z`).getTime() / 1000)));
+  yahooUrl.searchParams.set("period2", String(Math.floor(Date.now() / 1000)));
+  yahooUrl.searchParams.set("interval", "1d");
+  yahooUrl.searchParams.set("includePrePost", "false");
+  yahooUrl.searchParams.set("events", "split");
+
+  const response = await fetch(yahooUrl, {
+    headers: {
+      accept: "application/json",
+      "user-agent": "fin-port-next-dashboard/0.2"
+    },
+    cache: "no-store"
+  });
+
+  if (!response.ok) throw new Error(`Market provider returned HTTP ${response.status} for ${symbol}`);
+
+  const payload = await response.json();
+  const result = payload.chart?.result?.[0] as YahooChartResult | undefined;
+  if (!result) throw new Error(payload.chart?.error?.description || `No chart data returned for ${symbol}`);
+
+  const closes = new Map<string, number>();
+  const timestamps = result.timestamp || [];
+  const quote = result.indicators?.quote?.[0] || {};
+
+  const splits = Object.values(result.events?.splits || {}).filter(
+    (split) => split.numerator > 0 && split.denominator > 0
+  );
+
+  timestamps.forEach((timestamp, index) => {
+    const close = quote.close?.[index];
+    if (close === null || close === undefined || !Number.isFinite(close)) return;
+
+    const unadjust = splits
+      .filter((split) => split.date > timestamp)
+      .reduce((factor, split) => factor * (split.numerator / split.denominator), 1);
+    closes.set(new Date(timestamp * 1000).toISOString().slice(0, 10), close * unadjust);
+  });
+
+  return { symbol, currency: result.meta?.currency || "USD", closes };
 }
 
 export function fallbackMarketData(

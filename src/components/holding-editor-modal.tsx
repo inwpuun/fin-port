@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { currencyFormat } from "@/lib/format";
 import type { AllocationRule, PortfolioSeed } from "@/types/portfolio";
 
-/** The allocation row that carries a literal balance instead of a position. */
+/** The allocation row for cash; its balances are edited in CashModal, not here. */
 export const CASH_SYMBOL = "CASH";
 
 export type HoldingEditorSave = {
@@ -19,8 +19,8 @@ export type HoldingEditorTarget = {
   buyPrice?: number;
   costCurrency?: string;
   category?: string;
-  cashValue?: number;
-  cashCurrency?: string;
+  /** Built from the trade log: only its lane can be edited here. */
+  tradeManaged?: boolean;
 };
 
 type Props = {
@@ -39,19 +39,18 @@ const currencies = ["USD", "THB", "EUR", "GBP", "JPY"];
  *
  * Quantity and buy price are stored as a total cost basis, which is what the
  * holdings table holds; entering them directly avoids the round trip through a
- * market quote that the holding-value form needs.
+ * market quote that the holding-value form needs. A position with a trade log
+ * is the sum of its trades, so for those only the lane is editable.
  */
 export function HoldingEditorModal({ target, categories, onClose, onSaved }: Props) {
   const isEdit = Boolean(target);
-  const isCash = (target?.symbol ?? "").toUpperCase() === CASH_SYMBOL;
+  const laneOnly = Boolean(target?.tradeManaged);
 
   const [symbol, setSymbol] = useState(target?.symbol ?? "");
   const [quantity, setQuantity] = useState(target?.quantity ? String(target.quantity) : "");
   const [buyPrice, setBuyPrice] = useState(target?.buyPrice ? String(target.buyPrice) : "");
   const [costCurrency, setCostCurrency] = useState(target?.costCurrency || "USD");
   const [category, setCategory] = useState(target?.category ?? "");
-  const [cashValue, setCashValue] = useState(target?.cashValue ? String(target.cashValue) : "");
-  const [cashCurrency, setCashCurrency] = useState(target?.cashCurrency || "THB");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -87,24 +86,16 @@ export function HoldingEditorModal({ target, categories, onClose, onSaved }: Pro
     setSaving(true);
 
     try {
-      if (isCash) {
-        const value = Number(cashValue);
-        if (!Number.isFinite(value) || value < 0) throw new Error("Cash value must be zero or more.");
-
-        const response = await fetch("/api/allocation", {
+      if (laneOnly) {
+        const response = await fetch("/api/portfolio/my-port", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            symbol: cleanSymbol,
-            category: category.trim(),
-            cashValue: value,
-            cashCurrency
-          })
+          body: JSON.stringify({ stock: cleanSymbol, category: category.trim() })
         });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "Unable to save the allocation");
 
-        onSaved({ allocationRules: payload.allocationRules });
+        onSaved({ portfolio: payload.portfolio, allocationRules: payload.allocationRules });
       } else {
         const q = Number(quantity);
         const p = Number(buyPrice);
@@ -180,38 +171,11 @@ export function HoldingEditorModal({ target, categories, onClose, onSaved }: Pro
             />
           </label>
 
-          {isCash ? (
-            <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
-              <label className="field-shell grid gap-1 rounded-2xl px-4 py-3">
-                <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Cash value</span>
-                <input
-                  id="editor-cash-value"
-                  name="cashValue"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={cashValue}
-                  onChange={(event) => setCashValue(event.target.value)}
-                  className="bg-transparent text-lg outline-none"
-                />
-              </label>
-              <label className="field-shell grid gap-1 rounded-2xl px-4 py-3">
-                <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Currency</span>
-                <select
-                  id="editor-cash-currency"
-                  name="cashCurrency"
-                  value={cashCurrency}
-                  onChange={(event) => setCashCurrency(event.target.value)}
-                  className="bg-transparent text-lg outline-none"
-                >
-                  {currencies.map((item) => (
-                    <option className="bg-panel" key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+          {laneOnly ? (
+            <p className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-400">
+              Quantity and cost come from this symbol&apos;s transactions. Use <strong className="text-white">Trade</strong> to
+              record a buy or sell.
+            </p>
           ) : (
             <>
               <div className="grid gap-3 sm:grid-cols-2">

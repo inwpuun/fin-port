@@ -19,8 +19,8 @@ function pickTimestamp(pathname: string, freshness: Freshness): string | null {
     return present.reduce((newest, value) => (value > newest ? value : newest));
   };
 
-  if (pathname.startsWith("/portfolio")) return latestOf(freshness.holdings, freshness.allocations);
-  if (pathname.startsWith("/allocation")) return latestOf(freshness.allocations, freshness.holdings);
+  if (pathname.startsWith("/portfolio")) return latestOf(freshness.holdings, freshness.allocations, freshness.trades);
+  if (pathname.startsWith("/allocation")) return latestOf(freshness.allocations, freshness.holdings, freshness.trades);
   if (pathname.startsWith("/cash-book")) return freshness.cashBook;
   if (pathname.startsWith("/watchlist")) return freshness.watchlist;
   if (pathname === "/") return freshness.watchlist;
