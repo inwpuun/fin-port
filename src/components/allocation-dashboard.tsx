@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fallbackMarketData, normalizeSymbol } from "@/lib/market";
 import { currencyFormat } from "@/lib/format";
-import type { MarketData } from "@/types/market";
 import type { AllocationRule, CashBalances, HoldingTransaction, PortfolioSeed } from "@/types/portfolio";
 import {
   CASH_SYMBOL,
@@ -150,29 +149,52 @@ export function AllocationDashboard({
     if ("portfolio" in result && result.portfolio) setPortfolioSeed(result.portfolio);
   }
 
-  async function fetchMarket(symbolInput: string) {
-    const url = new URL("/api/market", window.location.origin);
-    url.searchParams.set("symbol", symbolInput);
-    url.searchParams.set("range", "1y");
-    url.searchParams.set("drawdownRange", "1y");
-    try {
-      const response = await fetch(url);
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Unable to fetch market data");
-      return payload as MarketData;
-    } catch {
-      return fallbackMarketData(symbolInput, "1y", "1y");
+  /**
+   * Every price the page needs, in one request. This page only multiplies
+   * quantity by the last close, so it asks for prices alone rather than a
+   * year of candles and analytics per symbol. A symbol that fails falls back
+   * to the same placeholder price as before.
+   */
+  async function loadPrices(symbols: string[]) {
+    const prices = new Map<string, number>();
+    if (symbols.length) {
+      const url = new URL("/api/market/prices", window.location.origin);
+      url.searchParams.set("symbols", symbols.join(","));
+      try {
+        const response = await fetch(url);
+        const payload = await response.json();
+        if (response.ok) {
+          for (const [symbol, quote] of Object.entries(payload.prices as Record<string, { price: number }>)) {
+            prices.set(symbol, quote.price);
+          }
+        }
+      } catch {
+        // Fall through to the placeholders below.
+      }
     }
+    return (symbol: string) => prices.get(symbol) ?? fallbackMarketData(symbol, "1y", "1y").price;
   }
 
   async function calculateAllocation() {
     setLoading(true);
     try {
       const seedBySymbol = new Map(portfolioSeed.map((seed) => [normalizeKey(seed.symbol), seed]));
+      const priceOf = await loadPrices([
+        ...portfolioSeed
+          .filter((seed) => !Number.isFinite(seed.marketValue) && Number.isFinite(seed.quantity))
+          .map((seed) => seed.symbol),
+        ...(cash.THB ? ["THB=X"] : [])
+      ]);
+      const cashInUsd = () => {
+        if (!cash.THB) return cash.USD;
+        const rate = priceOf("THB=X");
+        return cash.USD + (rate > 0 ? cash.THB / rate : 0);
+      };
+
       const nextPositions = await Promise.all(
         allocationRules.map(async (rule) => {
           if (normalizeKey(rule.symbol) === CASH_SYMBOL) {
-            const cashValue = await cashInUsd();
+            const cashValue = cashInUsd();
 
             return {
               category: rule.category,
@@ -202,11 +224,10 @@ export function AllocationDashboard({
           }
 
           if (Number.isFinite(seed.quantity)) {
-            const market = await fetchMarket(seed.symbol);
             return {
               category: rule.category,
               symbol: rule.symbol,
-              value: seed.quantity! * market.price,
+              value: seed.quantity! * priceOf(seed.symbol),
               source: "portfolio" as const
             };
           }
@@ -237,7 +258,7 @@ export function AllocationDashboard({
           const value = Number.isFinite(seed.marketValue)
             ? seed.marketValue!
             : Number.isFinite(seed.quantity)
-              ? seed.quantity! * (await fetchMarket(seed.symbol)).price
+              ? seed.quantity! * priceOf(seed.symbol)
               : 0;
 
           return {
@@ -251,7 +272,7 @@ export function AllocationDashboard({
 
       // Cash with no lane still belongs in the total, like any unruled holding.
       if (!ruled.has(CASH_SYMBOL) && (cash.USD > 0 || cash.THB > 0)) {
-        unassigned.push({ category: UNASSIGNED_CATEGORY, symbol: CASH_SYMBOL, value: await cashInUsd(), source: "unassigned" as const });
+        unassigned.push({ category: UNASSIGNED_CATEGORY, symbol: CASH_SYMBOL, value: cashInUsd(), source: "unassigned" as const });
       }
 
       setPositions([...nextPositions, ...unassigned]);
@@ -290,12 +311,6 @@ export function AllocationDashboard({
     return currencyFormat(value);
   }
 
-  /** Both balances in dollars, baht converted at the market rate. */
-  async function cashInUsd() {
-    if (!cash.THB) return cash.USD;
-    const fxMarket = await fetchMarket("THB=X");
-    return cash.USD + (fxMarket.price > 0 ? cash.THB / fxMarket.price : 0);
-  }
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-4">

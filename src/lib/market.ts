@@ -351,6 +351,55 @@ export async function fetchDailyCloses(symbolInput: string, from: string) {
   return { symbol, currency: result.meta?.currency || "USD", closes };
 }
 
+export type LatestPrice = { symbol: string; price: number; currency: string };
+
+const PRICE_CACHE_MS = 60 * 1000;
+
+declare global {
+  var __finPortPrices: Map<string, { at: number; value: LatestPrice }> | undefined;
+}
+
+/**
+ * The last close only, for pages that value a position and draw nothing.
+ * Same number as fetchMarketData's `price` (the last daily close), from a
+ * five-day window instead of a year of candles plus analytics, and held for a
+ * minute so reloading a page does not ask Yahoo again.
+ */
+export async function fetchLatestPrice(symbolInput: string): Promise<LatestPrice> {
+  const symbol = normalizeSymbol(symbolInput);
+  const cache = (globalThis.__finPortPrices ??= new Map());
+  const hit = cache.get(symbol);
+  if (hit && Date.now() - hit.at < PRICE_CACHE_MS) return hit.value;
+
+  const yahooUrl = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`);
+  yahooUrl.searchParams.set("range", "5d");
+  yahooUrl.searchParams.set("interval", "1d");
+  yahooUrl.searchParams.set("includePrePost", "false");
+
+  const response = await fetch(yahooUrl, {
+    headers: {
+      accept: "application/json",
+      "user-agent": "fin-port-next-dashboard/0.2"
+    },
+    cache: "no-store"
+  });
+
+  if (!response.ok) throw new Error(`Market provider returned HTTP ${response.status} for ${symbol}`);
+
+  const payload = await response.json();
+  const result = payload.chart?.result?.[0] as YahooChartResult | undefined;
+  if (!result) throw new Error(payload.chart?.error?.description || `No chart data returned for ${symbol}`);
+
+  const price = (result.indicators?.quote?.[0]?.close || [])
+    .filter((close): close is number => close !== null && close !== undefined && Number.isFinite(close))
+    .at(-1);
+  if (price === undefined) throw new Error(`No recent close for ${symbol}`);
+
+  const value = { symbol, price, currency: result.meta?.currency || "USD" };
+  cache.set(symbol, { at: Date.now(), value });
+  return value;
+}
+
 export function fallbackMarketData(
   symbolInput: string,
   range: MarketRange = "1y",

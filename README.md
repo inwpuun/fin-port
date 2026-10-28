@@ -398,6 +398,7 @@ Nothing but `/unlock` and static assets answers without one.
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/market?symbol=&range=&drawdownRange=&overlays=` | quotes, candles and analytics |
+| `GET` | `/api/market/prices?symbols=A,B,C` | last close for many symbols in one request (cached a minute); `/allocation` uses it |
 | `GET` | `/api/exchange-rate/usd-thb` | BOT reference rate |
 | `GET` `POST` `DELETE` | `/api/watchlist/my-watchlist` | saved symbols |
 | `POST` `DELETE` | `/api/portfolio/my-port` | required | upsert or remove a holding, and its allocation lane (remove also deletes its trades) |
