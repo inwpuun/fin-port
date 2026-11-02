@@ -80,6 +80,38 @@ const rangeDays = new Map<string, number>([
  */
 const WARMUP_DAYS = 420;
 
+const YAHOO_TIMEOUT_MS = 15_000;
+
+/**
+ * Every call to Yahoo goes through here, so a failure says why. A bare
+ * fetch() rejects with "fetch failed" and hides the socket error in `cause`;
+ * that hid a connect-timeout bug for weeks (see instrumentation.ts).
+ */
+async function yahooFetch(url: URL, symbol: string) {
+  try {
+    return await fetch(url, {
+      headers: {
+        accept: "application/json",
+        "user-agent": "fin-port-next-dashboard/0.2"
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(YAHOO_TIMEOUT_MS)
+    });
+  } catch (error) {
+    const reason = describeFetchError(error);
+    console.error(`Yahoo request for ${symbol} failed: ${reason}`);
+    throw new Error(`Market provider unreachable for ${symbol} (${reason})`);
+  }
+}
+
+function describeFetchError(error: unknown) {
+  if (error instanceof DOMException && error.name === "TimeoutError") return `no answer in ${YAHOO_TIMEOUT_MS / 1000}s`;
+  if (!(error instanceof Error)) return String(error);
+  const cause = error.cause as { code?: string; message?: string; errors?: Array<{ code?: string }> } | undefined;
+  const codes = Array.from(new Set((cause?.errors ?? []).map((item) => item.code).filter(Boolean)));
+  return [cause?.code ?? cause?.message ?? error.message, codes.length ? `tried: ${codes.join(", ")}` : ""].filter(Boolean).join("; ");
+}
+
 export const marketRanges: Array<{ value: MarketRange; short: string; label: string }> = [
   { value: "1mo", short: "1M", label: "1 month" },
   { value: "3mo", short: "3M", label: "3 months" },
@@ -273,15 +305,10 @@ export async function fetchMarketData(
   yahooUrl.searchParams.set("includePrePost", "false");
   yahooUrl.searchParams.set("events", "div,splits");
 
-  const response = await fetch(yahooUrl, {
-    headers: {
-      accept: "application/json",
-      "user-agent": "fin-port-next-dashboard/0.2"
-    },
-    cache: "no-store"
-  });
+  const response = await yahooFetch(yahooUrl, symbol);
 
   if (!response.ok) {
+    console.error(`Yahoo returned HTTP ${response.status} for ${symbol}`);
     throw new Error(`Market provider returned HTTP ${response.status}`);
   }
 
@@ -318,13 +345,7 @@ export async function fetchDailyCloses(symbolInput: string, from: string) {
   yahooUrl.searchParams.set("includePrePost", "false");
   yahooUrl.searchParams.set("events", "split");
 
-  const response = await fetch(yahooUrl, {
-    headers: {
-      accept: "application/json",
-      "user-agent": "fin-port-next-dashboard/0.2"
-    },
-    cache: "no-store"
-  });
+  const response = await yahooFetch(yahooUrl, symbol);
 
   if (!response.ok) throw new Error(`Market provider returned HTTP ${response.status} for ${symbol}`);
 
@@ -402,13 +423,7 @@ export async function fetchLatestPrice(symbolInput: string): Promise<LatestPrice
   yahooUrl.searchParams.set("interval", "1d");
   yahooUrl.searchParams.set("includePrePost", "false");
 
-  const response = await fetch(yahooUrl, {
-    headers: {
-      accept: "application/json",
-      "user-agent": "fin-port-next-dashboard/0.2"
-    },
-    cache: "no-store"
-  });
+  const response = await yahooFetch(yahooUrl, symbol);
 
   if (!response.ok) throw new Error(`Market provider returned HTTP ${response.status} for ${symbol}`);
 
