@@ -471,15 +471,13 @@ export function analyseMarket(history: Candle[], windowStart: number) {
     }
   };
 
-  // Only what cannot be recomputed from `candles` plus the scalars above: the
-  // averages and the volatility need warm-up bars the window does not carry,
-  // and the drawdown needs a peak that may sit before it.
-  const overlays: MarketOverlays = {
-    sma50: sma50.slice(windowStart).map((value) => round(value)),
-    sma200: sma200.slice(windowStart).map((value) => round(value)),
-    volatility: volatility.slice(windowStart).map((value) => round(value, 2)),
-    drawdown: drawdown.slice(windowStart).map((value) => round(value, 2)!),
-    crosses: crosses.filter((cross) => cross.time >= (history[windowStart]?.time || ""))
+  // Only what cannot be recomputed from the candles plus the scalars above:
+  // the averages need warm-up bars. They span the whole history so a chart
+  // zoomed out past the window still has them; market.ts adds the lead bars.
+  const overlays: Omit<MarketOverlays, "lead" | "leadVolume"> = {
+    sma50: sma50.map((value) => round(value)),
+    sma200: sma200.map((value) => round(value)),
+    crosses
   };
 
   return { analytics, overlays };

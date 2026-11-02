@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { drawdownRanges, fallbackMarketData, normalizeSymbol } from "@/lib/market";
 import { toMarketSignal } from "@/lib/analytics";
 import { currencyFormat, percentFormat } from "@/lib/format";
@@ -64,6 +64,11 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
   const [usdThbRate, setUsdThbRate] = useState<UsdThbRate | null>(null);
   const [fxLoading, setFxLoading] = useState(false);
   const [fxError, setFxError] = useState("");
+  const [dragging, setDragging] = useState("");
+  const dragRef = useRef<{ symbol: string; before: string[] } | null>(null);
+  // Prices are refetched when the *set* of symbols changes, not its order:
+  // dragging a row must not reload every quote.
+  const symbolsKey = useMemo(() => [...symbols].sort().join(","), [symbols]);
 
   useEffect(() => {
     setWatchlistSeed(seededSymbols);
@@ -75,7 +80,7 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
     if (!bootstrapped) return;
     refreshRows(symbols, drawdownRange);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbols, drawdownRange, bootstrapped]);
+  }, [symbolsKey, drawdownRange, bootstrapped]);
 
   const summary = useMemo(() => {
     const positive = rows.filter((row) => row.changePercent >= 0).length;
@@ -89,7 +94,14 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
     return { positive, flagged, averageDrawdown, worstDrawdown };
   }, [drawdownLimit, rows]);
   const sortedRows = useMemo(() => {
-    if (!sort) return rows;
+    if (!sort) {
+      // Unsorted means the saved watchlist order, which the drag handles edit.
+      const position = new Map(symbols.map((item, index) => [normalizeSymbol(item), index]));
+      return [...rows].sort(
+        (first, second) =>
+          (position.get(normalizeSymbol(first.requestSymbol)) ?? Infinity) - (position.get(normalizeSymbol(second.requestSymbol)) ?? Infinity)
+      );
+    }
 
     return [...rows].sort((first, second) => {
       const firstValue = getSortValue(first, sort.key);
@@ -102,7 +114,7 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
 
       return (Number(firstValue) - Number(secondValue)) * direction;
     });
-  }, [rows, sort]);
+  }, [rows, sort, symbols]);
 
   async function fetchMarket(symbolInput: string, topRange = drawdownRange) {
     const url = new URL("/api/market", window.location.origin);
@@ -194,6 +206,51 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
       setWatchlistError(error instanceof Error ? error.message : "Unable to save the watchlist");
     } finally {
       setRemovingSymbol("");
+    }
+  }
+
+  // Drag to reorder. Pointer events rather than HTML5 drag-and-drop, so the
+  // same handle works with a mouse and a finger: the row under the pointer
+  // swaps in live, and the order is saved once on release.
+  function startReorder(event: PointerEvent<HTMLElement>, rowSymbol: string) {
+    if (sort || event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = { symbol: rowSymbol, before: symbols };
+    setDragging(rowSymbol);
+  }
+
+  function moveReorder(event: PointerEvent<HTMLElement>) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const target = document
+      .elementFromPoint(event.clientX, event.clientY)
+      ?.closest<HTMLElement>("[data-reorder-symbol]")?.dataset.reorderSymbol;
+    if (!target || isPendingSymbol(target, drag.symbol)) return;
+    setSymbols((current) => moveSymbol(current, drag.symbol, target));
+  }
+
+  async function endReorder(event: PointerEvent<HTMLElement>) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    setDragging("");
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (symbols.join(",") === drag.before.join(",")) return;
+
+    setWatchlistError("");
+    try {
+      const response = await fetch("/api/watchlist/my-watchlist", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ symbols })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to save the watchlist order");
+      setWatchlistSeed((payload as { symbols: string[] }).symbols);
+    } catch (error) {
+      setSymbols(drag.before);
+      setWatchlistError(error instanceof Error ? error.message : "Unable to save the watchlist order");
     }
   }
 
@@ -323,6 +380,11 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
           <div className="border-b border-white/10 p-4 sm:p-6">
             <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Symbols</p>
             <h2 className="text-2xl font-black">Watchlist table</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              {sort
+                ? "Sorted by column. Clear the sort to drag rows into your own order."
+                : "Drag the handle to reorder. Market watch shows your symbols in this order."}
+            </p>
           </div>
           <MobileSortBar columns={sortableColumns} sort={sort} onSort={changeSort} onReset={() => setSort(null)} />
           <ul className="divide-y divide-white/10 md:hidden">
@@ -330,9 +392,22 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
               const removing = isPendingSymbol(removingSymbol, row.requestSymbol);
 
               return (
-                <li key={row.requestSymbol} className="grid gap-3 p-4">
+                <li
+                  key={row.requestSymbol}
+                  data-reorder-symbol={row.requestSymbol}
+                  className={`grid gap-3 p-4 transition-colors ${isPendingSymbol(dragging, row.requestSymbol) ? "bg-cyan-signal/10" : ""}`}
+                >
                   <div className="flex items-start justify-between gap-3">
-                    <button type="button" onClick={() => openSymbolChart(row)} className="min-w-0 text-left">
+                    {!sort && (
+                      <DragHandle
+                        symbol={row.symbol}
+                        onPointerDown={(event) => startReorder(event, row.requestSymbol)}
+                        onPointerMove={moveReorder}
+                        onPointerUp={endReorder}
+                        onPointerCancel={endReorder}
+                      />
+                    )}
+                    <button type="button" onClick={() => openSymbolChart(row)} className="mr-auto min-w-0 text-left">
                       <strong className="block font-black text-white">{row.symbol}</strong>
                       <small className="block truncate text-slate-400">{row.name}</small>
                     </button>
@@ -373,6 +448,7 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
             <table className="w-full min-w-[1060px] border-collapse text-left">
               <thead className="text-xs uppercase tracking-wide text-slate-400">
                 <tr>
+                  <th className="w-10 pl-4" aria-label="Reorder"></th>
                   {sortableColumns.map((column) => (
                     <th
                       key={column.key}
@@ -396,7 +472,22 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
               </thead>
               <tbody>
                 {sortedRows.map((row) => (
-                  <tr key={row.requestSymbol} className="border-t border-white/10">
+                  <tr
+                    key={row.requestSymbol}
+                    data-reorder-symbol={row.requestSymbol}
+                    className={`border-t border-white/10 transition-colors ${isPendingSymbol(dragging, row.requestSymbol) ? "bg-cyan-signal/10" : ""}`}
+                  >
+                    <td className="w-10 pl-4">
+                      {!sort && (
+                        <DragHandle
+                          symbol={row.symbol}
+                          onPointerDown={(event) => startReorder(event, row.requestSymbol)}
+                          onPointerMove={moveReorder}
+                          onPointerUp={endReorder}
+                          onPointerCancel={endReorder}
+                        />
+                      )}
+                    </td>
                     <td className="px-6 py-4">
                       <button type="button" onClick={() => openSymbolChart(row)} className="block text-left font-black text-white underline-offset-4 hover:text-cyan-signal hover:underline">
                         {row.symbol}
@@ -443,6 +534,48 @@ export function WatchlistDashboard({ defaultSymbols }: { defaultSymbols: string[
       )}
     </div>
   );
+}
+
+function DragHandle({
+  symbol,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel
+}: {
+  symbol: string;
+  onPointerDown: (event: PointerEvent<HTMLElement>) => void;
+  onPointerMove: (event: PointerEvent<HTMLElement>) => void;
+  onPointerUp: (event: PointerEvent<HTMLElement>) => void;
+  onPointerCancel: (event: PointerEvent<HTMLElement>) => void;
+}) {
+  return (
+    <span
+      role="button"
+      tabIndex={-1}
+      aria-label={`Drag to reorder ${symbol}`}
+      title="Drag to reorder"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      className="grid h-9 w-6 shrink-0 cursor-grab touch-none select-none place-items-center rounded-lg text-slate-500 hover:bg-white/5 hover:text-white active:cursor-grabbing"
+    >
+      <svg viewBox="0 0 10 16" aria-hidden="true" className="h-4 w-2.5 fill-current">
+        {[3, 8, 13].flatMap((y) => [<circle key={`a${y}`} cx="2.5" cy={y} r="1.4" />, <circle key={`b${y}`} cx="7.5" cy={y} r="1.4" />])}
+      </svg>
+    </span>
+  );
+}
+
+function moveSymbol(list: string[], from: string, to: string) {
+  const fromIndex = list.findIndex((item) => isPendingSymbol(item, from));
+  const toIndex = list.findIndex((item) => isPendingSymbol(item, to));
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return list;
+  const next = [...list];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
 }
 
 function Summary({ title, value, tone = "text-white" }: { title: string; value: string; tone?: string }) {

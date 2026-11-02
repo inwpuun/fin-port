@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { fallbackMarketData, marketRanges } from "@/lib/market";
 import { currencyFormat, percentFormat } from "@/lib/format";
+import { fetchMarketWithRetry, isAbortError } from "@/lib/market-client";
 import type { ChartView, DrawdownRange, MarketData, MarketRange } from "@/types/market";
 import { MarketChart } from "./market-chart";
 import { ChartViewSwitch, MarketLensPanel, MarketVerdict, chartViews } from "./market-analysis";
@@ -22,43 +23,39 @@ type SymbolChartModalProps = {
 
 export function SymbolChartModal({ symbol, seed = null, drawdownRange = "1y", onClose }: SymbolChartModalProps) {
   const [range, setRange] = useState<MarketRange>("1y");
-  const [view, setView] = useState<ChartView>("trend");
-  const [chartType, setChartType] = useState<ChartType>("area");
+  const [view, setView] = useState<ChartView>("summary");
+  const [chartType, setChartType] = useState<ChartType>("candles");
   const [data, setData] = useState<MarketData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [retrying, setRetrying] = useState("");
   const [error, setError] = useState("");
 
-  const load = useCallback(
-    async (nextRange: MarketRange) => {
-      setLoading(true);
-      setError("");
-
-      try {
-        const url = new URL("/api/market", window.location.origin);
-        url.searchParams.set("symbol", symbol);
-        url.searchParams.set("range", nextRange);
-        url.searchParams.set("interval", "1d");
-        url.searchParams.set("drawdownRange", drawdownRange);
-        url.searchParams.set("overlays", "1");
-        const response = await fetch(url);
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "Unable to load chart");
-        setData(payload as MarketData);
-      } catch (fetchError) {
-        // Same contract as the tables: a dead provider shows demo data and
-        // says so, rather than an empty frame.
-        setData(fallbackMarketData(symbol, nextRange, drawdownRange, true));
-        setError(fetchError instanceof Error ? fetchError.message : "Unable to load chart");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [drawdownRange, symbol]
-  );
-
   useEffect(() => {
-    load(range);
-  }, [load, range]);
+    const controller = new AbortController();
+    setLoading(true);
+    setRetrying("");
+    setError("");
+
+    fetchMarketWithRetry(
+      { symbol, range, drawdownRange, overlays: true },
+      { signal: controller.signal, onRetry: (attempt, total) => setRetrying(`Provider did not answer, retrying ${attempt}/${total}...`) }
+    )
+      .then((payload) => setData(payload))
+      .catch((fetchError) => {
+        if (isAbortError(fetchError) || controller.signal.aborted) return;
+        // Only after every retry failed: a dead provider shows demo data and
+        // says so, rather than an empty frame.
+        setData(fallbackMarketData(symbol, range, drawdownRange, true));
+        setError(fetchError instanceof Error ? fetchError.message : "Unable to load chart");
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setLoading(false);
+        setRetrying("");
+      });
+
+    return () => controller.abort();
+  }, [drawdownRange, range, symbol]);
 
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
@@ -165,14 +162,15 @@ export function SymbolChartModal({ symbol, seed = null, drawdownRange = "1y", on
 
             {error && (
               <p className="rounded-2xl border border-rose-signal/40 bg-rose-signal/10 px-4 py-3 text-sm font-bold text-rose-signal">
-                {error} — showing offline demo data.
+                {error} — still failing after retries, showing offline demo data.
               </p>
             )}
 
             <div className="overflow-hidden rounded-3xl border border-white/10 bg-black/20">
               {loading && (
-                <div className="grid h-[52vh] min-h-[320px] place-items-center sm:min-h-[380px]">
+                <div className="grid h-[52vh] min-h-[320px] place-items-center content-center gap-3 sm:min-h-[380px]">
                   <div className="h-16 w-16 animate-pulse rounded-full border border-cyan-signal/50 bg-cyan-signal/10" />
+                  {retrying && <p className="text-sm font-bold text-slate-400">{retrying}</p>}
                 </div>
               )}
               {!loading && data && <MarketChart data={data} chartType={chartType} view={view} className="h-[52vh] min-h-[320px] sm:min-h-[380px]" />}
@@ -181,7 +179,8 @@ export function SymbolChartModal({ symbol, seed = null, drawdownRange = "1y", on
             {data && (
               <p className="px-1 text-xs text-slate-500">
                 {data.analytics.bars} bars shown, {data.analytics.historyBars} read from {data.analytics.historyFrom} so the
-                200-day average and twelve-month momentum are defined on the first bar. Source: {data.source}.
+                200-day average and twelve-month momentum are defined on the first bar. Zoom out to see the earlier bars; the
+                fits stay on the range picked. Source: {data.source}.
               </p>
             )}
           </div>

@@ -182,7 +182,9 @@ function assemble(
     candles,
     volume,
     analytics,
-    overlays: includeOverlays ? overlays : undefined,
+    overlays: includeOverlays
+      ? { ...overlays, lead: history.slice(0, windowStart), leadVolume: historyVolume.slice(0, windowStart) }
+      : undefined,
     price: last.close,
     previousClose: previous.close,
     change: compactNumber(change),

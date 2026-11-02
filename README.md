@@ -522,16 +522,20 @@ validating immediately, since the cookie is signed with it.
 
 Every chart -- the market page and the symbol modal on `/portfolio` and
 `/watchlist` -- can be read through three lenses, switched with the
-**Trend / Risk / Value** control. Each one changes what is plotted, adds its own
+**Summary / Trend / Value** control (Summary is the default, on candles). Each one changes what is plotted, adds its own
 lower pane, and swaps the metrics panel beside it:
 
 | Lens | Chart | Answers |
 | --- | --- | --- |
 | **Trend** | 50/200-day averages, golden and death crosses marked, lower pane of % from the 200-day average | Is this in an up regime? |
-| **Risk** | Underwater drawdown curve, plus annualised 60-day volatility | How large a position, and is this a good moment? |
+| **Summary** | Regression trend from the window's high to its low (or low to high) with +/-2 std dev edges, plus CDC ActionZone V3 2020 (EMA 12/26, bars coloured by zone, BUY/SELL marks) | Where is the move heading, and which zone is today in? The panel also carries the drawdown and volatility figures |
 | **Value** | Least-squares fit of log price with +/-1 and +/-2 sigma bands, lower pane of sigma from trend | Is the price stretched against its own trend? |
 
-Ranges run 1M, 3M, 6M, 1Y, 2Y, 5Y, and the axis defaults to logarithmic so
+Ranges run 1M, 3M, 6M, 1Y, 2Y, 5Y. The chart opens on that range but plots
+every bar loaded, so zooming out shows the warm-up history too; the fits (the
+regression trend, the value channel) stay computed on the range picked. If the
+provider fails, a chart retries three times with backoff before falling back to
+demo data. The legend sits behind the "i" in the chart's corner. The axis defaults to logarithmic so
 equal percentage moves get equal height. Each lens panel carries a "how it is
 traded" line, and the composite panel weights the three (45% trend, 35% value,
 20% risk) into one label, listing the five facts that produced it.
@@ -557,9 +561,9 @@ returns only the range asked for. A 5Y chart pulls ten years from the provider.
 footer shows them.
 
 Per-bar overlays cost real bytes over a five-year window, so only what cannot be
-recomputed from the candles is sent: the averages and the volatility (they need
-warm-up bars the window does not carry) and the drawdown (its peak may sit
-before the window). The regression channel and the z-score line are drawn from
+recomputed from the candles is sent: the warm-up bars before the window
+(`overlays.lead`) and the two averages over all of them. CDC ActionZone and the
+regression trend are computed in the browser from those bars. The regression channel and the z-score line are drawn from
 the three numbers in `analytics.value.logFit`, and a route only pays for
 overlays if it asks with `overlays=1` -- the tables do not.
 
@@ -570,7 +574,7 @@ notifications. That is gone, along with the notification permission toggle: an
 alert that only fires while a tab happens to be open is not a monitoring
 system. The drawdown *measurement* stayed -- `previousTop`, `drawdownPercent`
 and the top-window selector are still on `/`, `/portfolio` and `/watchlist`, and
-the risk lens reports the same fall against the whole loaded history.
+the Summary panel reports the same fall against the whole loaded history.
 
 ## Docker
 

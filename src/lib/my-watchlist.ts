@@ -82,6 +82,42 @@ export async function deleteMyWatchlistSymbol(symbol: string): Promise<string[]>
   return getMyWatchlistSymbols();
 }
 
+/**
+ * Saves the order the watchlist page was dragged into. Symbols the request
+ * leaves out keep their relative order after the ones it names, so a stale
+ * page cannot drop a symbol added from another tab. One statement, so the
+ * new order lands whole or not at all.
+ */
+export async function reorderMyWatchlist(symbols: string[]): Promise<string[]> {
+  const requested = uniqueSymbols(symbols);
+  if (!requested.length) throw new Error("Symbols are required");
+
+  const rows = await query<{ symbol: string }>(`select symbol from watchlist order by sort_order, symbol`);
+  const rank = new Map(requested.map((symbol, index) => [symbol, index]));
+
+  // An empty table is showing the starter list; reordering it is the first
+  // edit, so it is saved as the watchlist.
+  const stored = rows.length
+    ? rows
+        .map((row, index) => ({ symbol: row.symbol, key: rank.get(normalizeWatchlistSymbol(row.symbol)) ?? requested.length + index }))
+        .sort((first, second) => first.key - second.key)
+        .map((row) => row.symbol)
+    : requested;
+
+  try {
+    await query(
+      `insert into watchlist (symbol, sort_order)
+       select symbol, ord::int from unnest($1::text[]) with ordinality as v(symbol, ord)
+       on conflict (symbol) do update set sort_order = excluded.sort_order`,
+      [stored]
+    );
+  } catch (error) {
+    throw new Error(`Could not save the watchlist order: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  return getMyWatchlistSymbols();
+}
+
 function uniqueSymbols(symbols: string[]) {
   const seen = new Set<string>();
   const result: string[] = [];

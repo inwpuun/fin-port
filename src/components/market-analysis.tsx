@@ -1,11 +1,12 @@
 "use client";
 
 import { currencyFormat, percentFormat } from "@/lib/format";
+import { CDC_FAST, CDC_SLOW, REGRESSION_DEVIATIONS, cdcActionZone, cdcZoneCopy, chartSeries, regressionAt, regressionTrend } from "@/lib/indicators";
 import type { ChartView, MarketData, MarketSignal, TrendRegime, VerdictBias } from "@/types/market";
 
 export const chartViews: Array<{ value: ChartView; label: string; tag: string }> = [
+  { value: "summary", label: "Summary", tag: "Regression trend + CDC ActionZone" },
   { value: "trend", label: "Trend", tag: "200-day average + momentum" },
-  { value: "risk", label: "Risk", tag: "Drawdown + realised volatility" },
   { value: "value", label: "Value", tag: "Distance from the fitted trend" }
 ];
 
@@ -102,7 +103,7 @@ export function MarketVerdict({ data }: { data: MarketData }) {
         ))}
       </ul>
       <p className="mt-4 text-xs text-slate-500">
-        A weighted read of the three lenses below, not a backtested strategy. Nothing here sees your cost basis, your
+        A weighted read of trend, value and risk, not a backtested strategy. Nothing here sees your cost basis, your
         tax year, or anything outside this price series.
       </p>
     </section>
@@ -155,7 +156,7 @@ export function ChartViewSwitch({
 }
 
 export function MarketLensPanel({ data, view }: { data: MarketData; view: ChartView }) {
-  const { trend, risk, value } = data.analytics;
+  const { trend, value } = data.analytics;
   const currency = data.currency;
 
   if (view === "trend") {
@@ -196,47 +197,7 @@ export function MarketLensPanel({ data, view }: { data: MarketData; view: ChartV
     );
   }
 
-  if (view === "risk") {
-    return (
-      <Lens
-        title="Risk"
-        subtitle="Drawdown and realised volatility"
-        headline={plainPercent(risk.drawdown, 1)}
-        headlineTone="text-amber-signal"
-        note={`Below the ${risk.peakTime} peak of ${currencyFormat(risk.peakPrice, currency)}, ${sessions(risk.barsSincePeak)} ago. Worst in the loaded history: ${plainPercent(risk.maxDrawdown, 1)}.`}
-        howTo="Let volatility set the size and the drawdown distribution set the timing: buy deeper in that distribution rather than at the high, and de-risk when volatility jumps into its top decile after the trend has already broken."
-        stats={[
-          {
-            label: "Drawdown percentile",
-            value: plainPercent(risk.drawdownPercentile, 0),
-            note: "deeper than this share of days",
-            tone: "text-amber-signal"
-          },
-          { label: "Worst drawdown", value: plainPercent(risk.maxDrawdown, 1), tone: "text-rose-signal" },
-          { label: "Ulcer index", value: ratio(risk.ulcerIndex), note: "depth and duration, this window" },
-          { label: `From ${data.drawdownLabel} top`, value: signedPercent(data.drawdownPercent), tone: "text-amber-signal", note: currencyFormat(data.previousTop, currency) },
-          { label: "Volatility 60d", value: plainPercent(risk.vol60), note: "annualised", tone: "text-violet-300" },
-          { label: "Volatility 20d", value: plainPercent(risk.vol20), note: "annualised" },
-          { label: "Volatility 1y", value: plainPercent(risk.vol252), note: "annualised" },
-          {
-            label: "Volatility percentile",
-            value: plainPercent(risk.volPercentile, 0),
-            note: `median ${plainPercent(risk.volMedian)}`,
-            tone: (risk.volPercentile ?? 0) > 80 ? "text-rose-signal" : "text-slate-200"
-          },
-          { label: "ATR", value: plainPercent(risk.atrPercent), note: "14-day, share of price" },
-          {
-            label: "Size at 15% target",
-            value: risk.volTargetWeight === null ? "n/a" : `${risk.volTargetWeight.toFixed(0)}%`,
-            note: "of a full position",
-            tone: "text-cyan-signal"
-          },
-          { label: "Sharpe / Sortino", value: `${ratio(risk.sharpe)} / ${ratio(risk.sortino)}`, note: "loaded history, no cash rate" },
-          { label: "CAGR / Calmar", value: `${plainPercent(risk.cagr)} / ${ratio(risk.calmar)}` }
-        ]}
-      />
-    );
-  }
+  if (view === "summary") return <SummaryLens data={data} />;
 
   const zone =
     value.zScore === null
@@ -276,6 +237,92 @@ export function MarketLensPanel({ data, view }: { data: MarketData; view: ChartV
         { label: "-2 sigma", value: value.lower2 === null ? "n/a" : currencyFormat(value.lower2, currency), tone: "text-mint-signal" },
         { label: "RSI 14", value: value.rsi14 === null ? "n/a" : value.rsi14.toFixed(0) },
         { label: "Loaded history", value: signedPercent(value.longTermReturn), tone: tone(value.longTermReturn), note: `since ${data.analytics.historyFrom}` }
+      ]}
+    />
+  );
+}
+
+/**
+ * The default lens: where the window's high-to-low (or low-to-high) move is
+ * heading, what CDC ActionZone says about today's bar, and the risk figures
+ * that used to have a lens of their own.
+ */
+function SummaryLens({ data }: { data: MarketData }) {
+  const { risk } = data.analytics;
+  const currency = data.currency;
+  const { candles, windowStart } = chartSeries(data);
+  const cdc = cdcActionZone(candles);
+  const windowBars = candles.slice(windowStart);
+  const trend = regressionTrend(windowBars);
+  const lastIndex = candles.length - 1;
+  const zone = cdc.zones[lastIndex];
+  const zoneCopy = zone ? cdcZoneCopy[zone] : null;
+  const lastSignal = cdc.signals.at(-1);
+  const last = windowBars.at(-1);
+
+  // The line carried forward to the last bar, and how far today's close sits from it.
+  const projected = trend && last ? regressionAt(trend, windowBars.length - 1) : null;
+  const deviation = trend && last && projected !== null && trend.sigma ? (last.close - projected) / trend.sigma : null;
+
+  return (
+    <Lens
+      title="Summary"
+      subtitle={`CDC ActionZone · regression over ${data.rangeLabel}`}
+      headline={zoneCopy?.label ?? "Not enough bars"}
+      headlineTone={zone === "green" ? "text-mint-signal" : zone === "red" ? "text-rose-signal" : zone === "yellow" || zone === "orange" ? "text-amber-signal" : zone ? "text-cyan-signal" : "text-slate-400"}
+      note={
+        `${zoneCopy?.note ?? ""} ` +
+        (trend
+          ? `Over the ${data.rangeLabel}, price ran ${trend.direction === "high-to-low" ? "from its high down to its low" : "from its low up to its high"} (${trend.startTime} -> ${trend.endTime}); the regression through those closes moved ${percentFormat(trend.changePercent)}.`
+          : "Too few bars between the high and the low to fit a trend.")
+      }
+      howTo={`CDC ActionZone (EMA ${CDC_FAST}/${CDC_SLOW} on the close): buy on the first green bar after a bearish run, sell on the first red bar after a bullish one; yellow and orange are the warnings in between. The regression trend is fitted once, to the range you picked, and does not move when you zoom: price far outside its +/-${REGRESSION_DEVIATIONS} std dev edges has broken the move.`}
+      stats={[
+        {
+          label: "Last CDC signal",
+          value: lastSignal ? lastSignal.type.toUpperCase() : "none loaded",
+          tone: lastSignal?.type === "buy" ? "text-mint-signal" : lastSignal ? "text-rose-signal" : "text-slate-400",
+          note: lastSignal ? `${lastSignal.time} · ${sessions(lastIndex - lastSignal.index)} ago` : undefined
+        },
+        {
+          label: `EMA ${CDC_FAST} / ${CDC_SLOW}`,
+          value: `${currencyFormat(cdc.fast[lastIndex] ?? 0, currency)}`,
+          note: `slow ${currencyFormat(cdc.slow[lastIndex] ?? 0, currency)} · ${cdc.fast[lastIndex] > cdc.slow[lastIndex] ? "bullish" : "bearish"}`,
+          tone: cdc.fast[lastIndex] > cdc.slow[lastIndex] ? "text-mint-signal" : "text-rose-signal"
+        },
+        {
+          label: "Regression move",
+          value: trend ? percentFormat(trend.changePercent) : "n/a",
+          tone: tone(trend?.changePercent ?? null),
+          note: trend ? `${trend.direction === "high-to-low" ? "high -> low" : "low -> high"}, ${trend.bars} bars` : undefined
+        },
+        {
+          label: "Pearson's R",
+          value: trend ? trend.pearsonR.toFixed(2) : "n/a",
+          note: "how straight the move was; |R| near 1 is clean"
+        },
+        {
+          label: "Today vs extended line",
+          value: deviation === null ? "n/a" : `${deviation >= 0 ? "+" : ""}${deviation.toFixed(2)} std dev`,
+          tone: deviation === null ? "text-slate-400" : Math.abs(deviation) > REGRESSION_DEVIATIONS ? "text-amber-signal" : "text-slate-200",
+          note: projected === null ? undefined : `line at ${currencyFormat(projected, currency)}`
+        },
+        {
+          label: "Window high / low",
+          value: trend ? currencyFormat(trend.high.price, currency) : "n/a",
+          note: trend ? `low ${currencyFormat(trend.low.price, currency)}` : undefined
+        },
+        { label: "Drawdown", value: plainPercent(risk.drawdown, 1), tone: "text-amber-signal", note: `from the ${risk.peakTime} peak` },
+        { label: "Worst drawdown", value: plainPercent(risk.maxDrawdown, 1), tone: "text-rose-signal", note: "loaded history" },
+        { label: "Volatility 60d", value: plainPercent(risk.vol60), note: `annualised · ${plainPercent(risk.volPercentile, 0)} percentile` },
+        {
+          label: "Size at 15% target",
+          value: risk.volTargetWeight === null ? "n/a" : `${risk.volTargetWeight.toFixed(0)}%`,
+          note: "of a full position",
+          tone: "text-cyan-signal"
+        },
+        { label: "ATR", value: plainPercent(risk.atrPercent), note: "14-day, share of price" },
+        { label: "Sharpe / CAGR", value: `${ratio(risk.sharpe)} / ${plainPercent(risk.cagr)}`, note: "loaded history" }
       ]}
     />
   );

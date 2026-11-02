@@ -1,13 +1,12 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { drawdownRanges, fallbackMarketData, marketRanges } from "@/lib/market";
 import { currencyFormat, percentFormat } from "@/lib/format";
+import { fetchMarketWithRetry, isAbortError } from "@/lib/market-client";
 import type { ChartView, DrawdownRange, MarketData, MarketRange } from "@/types/market";
 import { MarketChart } from "./market-chart";
 import { ChartViewSwitch, MarketLensPanel, MarketVerdict, chartViews } from "./market-analysis";
-
-const quickSymbols = ["AAPL", "MSFT", "GC=F", "BTC-USD", "^GSPC", "^IXIC"];
 
 type EventLog = {
   id: string;
@@ -23,14 +22,17 @@ type WatchlistWriteResponse = {
 export function MarketDashboard() {
   const [symbol, setSymbol] = useState("AAPL");
   const [range, setRange] = useState<MarketRange>("1y");
-  const [view, setView] = useState<ChartView>("trend");
+  const [view, setView] = useState<ChartView>("summary");
   const [drawdownRange, setDrawdownRange] = useState<DrawdownRange>("1y");
   const [data, setData] = useState<MarketData | null>(null);
-  const [chartType, setChartType] = useState<"candles" | "area">("area");
+  const [chartType, setChartType] = useState<"candles" | "area">("candles");
   const [events, setEvents] = useState<EventLog[]>([]);
   const [loading, setLoading] = useState(false);
-  const [watchlist, setWatchlist] = useState(quickSymbols);
+  const [watchlist, setWatchlist] = useState<string[]>([]);
+  const [watchlistLoaded, setWatchlistLoaded] = useState(false);
   const [watchlistSaving, setWatchlistSaving] = useState(false);
+  const requestRef = useRef<AbortController | null>(null);
+  const stripRef = useRef<HTMLDivElement | null>(null);
 
   const activeView = chartViews.find((item) => item.value === view)!;
 
@@ -40,28 +42,31 @@ export function MarketDashboard() {
 
   async function loadMarket(nextSymbol = symbol, nextRange = range, nextDrawdownRange = drawdownRange) {
     const cleanSymbol = nextSymbol.trim().toUpperCase() || "AAPL";
+    // A newer pick wins: the previous request, retries included, is dropped.
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
     setLoading(true);
     setSymbol(cleanSymbol);
 
     try {
-      const url = new URL("/api/market", window.location.origin);
-      url.searchParams.set("symbol", cleanSymbol);
-      url.searchParams.set("range", nextRange);
-      url.searchParams.set("interval", "1d");
-      url.searchParams.set("drawdownRange", nextDrawdownRange);
-      url.searchParams.set("overlays", "1");
-      const response = await fetch(url);
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Unable to fetch market data");
+      const payload = await fetchMarketWithRetry(
+        { symbol: cleanSymbol, range: nextRange, drawdownRange: nextDrawdownRange, overlays: true },
+        {
+          signal: controller.signal,
+          onRetry: (attempt, total) => addEvent("Retrying", `${cleanSymbol}: provider did not answer, attempt ${attempt + 1} of ${total + 1}.`)
+        }
+      );
       setData(payload);
       setSymbol(payload.symbol);
       addEvent("Market loaded", `${payload.symbol} over ${payload.rangeLabel}, ${payload.analytics.historyBars} bars read.`);
     } catch (error) {
+      if (isAbortError(error) || controller.signal.aborted) return;
       const fallback = fallbackMarketData(cleanSymbol, nextRange, nextDrawdownRange, true);
       setData(fallback);
-      addEvent("Offline fallback", error instanceof Error ? error.message : "Using demo data.");
+      addEvent("Offline fallback", `${error instanceof Error ? error.message : "Provider unreachable"} -- still failing after retries, showing demo data.`);
     } finally {
-      setLoading(false);
+      if (requestRef.current === controller) setLoading(false);
     }
   }
 
@@ -72,15 +77,39 @@ export function MarketDashboard() {
       if (!response.ok) throw new Error(payload.error || "Unable to load the watchlist");
       setWatchlist((payload as { symbols: string[] }).symbols);
     } catch (error) {
-      addEvent("Watchlist load failed", error instanceof Error ? error.message : "Using default symbols.");
+      addEvent("Watchlist load failed", error instanceof Error ? error.message : "Unable to load the watchlist.");
+    } finally {
+      setWatchlistLoaded(true);
     }
   }
 
   useEffect(() => {
     loadMarket("AAPL", "1y", "1y");
     loadSavedWatchlist();
+    return () => requestRef.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A mouse wheel scrolls the symbol strip sideways; it has no vertical room.
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+
+    function onWheel(event: WheelEvent) {
+      if (!strip || strip.scrollWidth <= strip.clientWidth || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+      event.preventDefault();
+      strip.scrollLeft += event.deltaY;
+    }
+
+    strip.addEventListener("wheel", onWheel, { passive: false });
+    return () => strip.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Keep the active symbol in view when it is picked from somewhere else.
+  useEffect(() => {
+    const active = stripRef.current?.querySelector<HTMLElement>("[data-active='true']");
+    active?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  }, [data?.symbol, watchlist]);
 
   function submitSymbol(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -114,6 +143,7 @@ export function MarketDashboard() {
     }
   }
 
+  const inWatchlist = Boolean(data && watchlist.includes(data.symbol));
   const changeTone = data && data.changePercent > 0 ? "text-mint-signal" : data && data.changePercent < 0 ? "text-rose-signal" : "text-slate-400";
   const trend = data?.analytics.trend;
   const risk = data?.analytics.risk;
@@ -122,8 +152,8 @@ export function MarketDashboard() {
   return (
     <div className={loading ? "animate-glow" : ""}>
       <section className="glass-panel mb-4 rounded-3xl p-3">
-        <form onSubmit={submitSymbol} className="grid grid-cols-[1fr_1fr_56px] gap-2 md:grid-cols-[1fr_110px_150px_56px]">
-          <label className="field-shell col-span-3 grid gap-1 rounded-2xl px-4 py-3 md:col-span-1">
+        <form onSubmit={submitSymbol} className="grid grid-cols-[1fr_56px] gap-2 md:grid-cols-[1fr_150px_56px]">
+          <label className="field-shell col-span-2 grid gap-1 rounded-2xl px-4 py-3 md:col-span-1">
             <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Symbol</span>
             <input
               className="min-w-0 bg-transparent text-xl text-white outline-none"
@@ -133,27 +163,6 @@ export function MarketDashboard() {
               onChange={(event) => setSymbol(event.target.value)}
               aria-label="Enter stock, gold, bitcoin, or index symbol"
             />
-          </label>
-          <label className="field-shell grid min-w-0 gap-1 rounded-2xl px-4 py-3">
-            <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Range</span>
-            <select
-              className="bg-transparent text-lg text-white outline-none"
-              id="range"
-              name="range"
-              value={range}
-              onChange={(event) => {
-                const nextRange = event.target.value as MarketRange;
-                setRange(nextRange);
-                loadMarket(symbol, nextRange, drawdownRange);
-              }}
-              aria-label="Chart range"
-            >
-              {marketRanges.map((item) => (
-                <option className="bg-panel" key={item.value} value={item.value}>
-                  {item.short}
-                </option>
-              ))}
-            </select>
           </label>
           <label className="field-shell grid min-w-0 gap-1 rounded-2xl px-4 py-3">
             <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Top window</span>
@@ -180,16 +189,43 @@ export function MarketDashboard() {
             ↗
           </button>
         </form>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {quickSymbols.map((item) => (
-            <button
-              key={item}
-              onClick={() => loadMarket(item, range, drawdownRange)}
-              className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-slate-300 transition sm:px-4 sm:py-2 sm:text-base hover:border-cyan-signal/40 hover:text-white"
-            >
-              {item === "GC=F" ? "Gold" : item === "BTC-USD" ? "BTC" : item}
-            </button>
-          ))}
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={saveCurrentToWatchlist}
+            disabled={!data || watchlistSaving || inWatchlist}
+            title={inWatchlist ? `${data?.symbol} is on your watchlist` : "Add the current symbol to your watchlist"}
+            className="grid size-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-lg font-black text-cyan-signal transition hover:border-cyan-signal/40 disabled:cursor-default disabled:text-slate-500 sm:size-10"
+            aria-label="Add current symbol to watchlist"
+          >
+            {watchlistSaving ? "…" : inWatchlist ? "✓" : "+"}
+          </button>
+          <div
+            ref={stripRef}
+            className="-my-1 flex min-w-0 flex-1 gap-2 overflow-x-auto py-1 [mask-image:linear-gradient(to_right,transparent,#000_12px,#000_calc(100%-24px),transparent)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            aria-label="Watchlist symbols"
+          >
+            {!watchlistLoaded && <span className="px-3 py-2 text-sm text-slate-500">Loading watchlist...</span>}
+            {watchlistLoaded && !watchlist.length && <span className="px-3 py-2 text-sm text-slate-500">Watchlist is empty.</span>}
+            {watchlist.map((item) => {
+              const active = item === data?.symbol;
+              return (
+                <button
+                  key={item}
+                  type="button"
+                  data-active={active}
+                  onClick={() => loadMarket(item, range, drawdownRange)}
+                  className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm transition sm:px-4 sm:py-2 sm:text-base ${
+                    active
+                      ? "border-cyan-signal/60 bg-cyan-signal/15 font-black text-white"
+                      : "border-white/10 bg-white/5 text-slate-300 hover:border-cyan-signal/40 hover:text-white"
+                  }`}
+                >
+                  {symbolLabel(item)}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </section>
 
@@ -242,6 +278,24 @@ export function MarketDashboard() {
                 </h2>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-1">
+                  {marketRanges.map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      onClick={() => {
+                        setRange(item.value);
+                        loadMarket(symbol, item.value, drawdownRange);
+                      }}
+                      title={item.label}
+                      className={`rounded-xl px-3 py-2 text-sm font-black transition ${
+                        range === item.value ? "bg-white text-[#05110e]" : "text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      {item.short}
+                    </button>
+                  ))}
+                </div>
                 <ChartViewSwitch view={view} onChange={setView} />
                 <button onClick={() => setChartType("candles")} className={chipClass(chartType === "candles")}>Candles</button>
                 <button onClick={() => setChartType("area")} className={chipClass(chartType === "area")}>Line</button>
@@ -263,34 +317,6 @@ export function MarketDashboard() {
 
         <aside className="grid content-start gap-4">
           {data && <MarketVerdict data={data} />}
-
-          <section className="glass-panel rounded-3xl p-4 sm:p-5">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Watchlist</p>
-                <h2 className="text-xl font-black">Markets</h2>
-              </div>
-              <button
-                onClick={saveCurrentToWatchlist}
-                disabled={!data || watchlistSaving}
-                className="grid h-10 w-10 place-items-center rounded-2xl border border-white/10 text-2xl text-cyan-signal"
-                title="Add current symbol"
-              >
-                {watchlistSaving ? "..." : "+"}
-              </button>
-            </div>
-            <div className="grid max-h-72 gap-2 overflow-auto">
-              {watchlist.map((item) => (
-                <button key={item} onClick={() => loadMarket(item, range, drawdownRange)} className="flex min-h-14 items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left">
-                  <span>
-                    <strong className="block">{item}</strong>
-                    <small className="text-slate-400">{item === data?.symbol ? "active" : "watch"}</small>
-                  </span>
-                  <em className="not-italic text-mint-signal">{item === data?.symbol ? "●" : "↗"}</em>
-                </button>
-              ))}
-            </div>
-          </section>
 
           <section className="glass-panel rounded-3xl p-4 sm:p-5">
             <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Data log</p>
@@ -332,6 +358,10 @@ function Metric({ title, value, note, tone = "text-white", className = "" }: { t
       <span className="text-sm text-slate-400 sm:text-base">{note}</span>
     </article>
   );
+}
+
+function symbolLabel(symbol: string) {
+  return symbol === "GC=F" ? "Gold" : symbol === "BTC-USD" ? "BTC" : symbol;
 }
 
 function chipClass(active: boolean) {

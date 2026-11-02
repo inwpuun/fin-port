@@ -2,8 +2,8 @@ export type AssetType = "equity" | "crypto" | "commodity" | "index";
 export type DrawdownRange = "1w" | "2w" | "1mo" | "2mo" | "3mo" | "1y";
 export type MarketRange = "1mo" | "3mo" | "6mo" | "1y" | "2y" | "5y";
 
-/** The three lenses the chart can be read through. See docs/chart-methods.md. */
-export type ChartView = "trend" | "risk" | "value";
+/** The lenses the chart can be read through. See docs/chart-methods.md. */
+export type ChartView = "summary" | "trend" | "value";
 export type TrendRegime = "uptrend" | "recovery" | "pullback" | "downtrend";
 export type VerdictBias = "accumulate" | "add" | "hold" | "trim" | "avoid";
 
@@ -113,16 +113,17 @@ export type MarketAnalytics = {
 };
 
 /**
- * Per-bar overlays, aligned index-for-index with `candles` -- so no timestamp
- * is repeated eleven times over a five-year window. `null` is a warm-up gap.
+ * Per-bar overlays for a drawn chart. `lead` is every bar loaded *before* the
+ * window -- the warm-up the averages need -- so a chart can show it when
+ * zoomed out while the analytics stay fitted to the window alone. The
+ * averages are aligned index-for-index with `[...lead, ...candles]`, so no
+ * timestamp is repeated; `null` is a warm-up gap.
  */
 export type MarketOverlays = {
+  lead: Candle[];
+  leadVolume: VolumePoint[];
   sma50: Array<number | null>;
   sma200: Array<number | null>;
-  /** Annualised realised volatility, 60-day window. */
-  volatility: Array<number | null>;
-  /** Percent below the running peak of everything loaded. */
-  drawdown: number[];
   crosses: Array<{ time: string; type: "golden" | "death" }>;
 };
 

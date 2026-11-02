@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthorized, unauthorized } from "@/lib/auth";
-import { deleteMyWatchlistSymbol, getMyWatchlistSymbols, upsertMyWatchlistSymbol } from "@/lib/my-watchlist";
+import { deleteMyWatchlistSymbol, getMyWatchlistSymbols, reorderMyWatchlist, upsertMyWatchlistSymbol } from "@/lib/my-watchlist";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,6 +43,23 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     return errorResponse(error instanceof Error ? error.message : "Unable to update the watchlist", 500);
+  }
+}
+
+/** Body: { symbols: string[] } in the new order. Returns the saved order. */
+export async function PUT(request: NextRequest) {
+  if (!(await isAuthorized(request))) return unauthorized();
+
+  const body = await readOptionalJson(request);
+  const symbols = isRecord(body) && Array.isArray(body.symbols) ? body.symbols.filter((item): item is string => typeof item === "string") : [];
+  if (!symbols.length) return errorResponse("Symbols are required");
+  if (symbols.length > 500) return errorResponse("Too many symbols");
+
+  try {
+    const saved = await reorderMyWatchlist(symbols);
+    return NextResponse.json({ symbols: saved }, { headers: { "cache-control": "no-store" } });
+  } catch (error) {
+    return errorResponse(error instanceof Error ? error.message : "Unable to reorder the watchlist", 500);
   }
 }
 

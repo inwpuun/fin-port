@@ -50,8 +50,8 @@ report("noiseless, 10%/yr, one year shown (expect slope 10, r2 1, z 0, no drawdo
   momentum12: smooth.analytics.trend.momentum.m12,
   verdict: smooth.analytics.verdict.label,
   barsShown: smooth.analytics.bars,
-  overlaysAligned: [smooth.overlays.sma200.length, smooth.overlays.drawdown.length],
-  sma200OnFirstBar: smooth.overlays.sma200[0]
+  overlaysSpanHistory: smooth.overlays.sma200.length === 1300,
+  sma200OnFirstBar: smooth.overlays.sma200[1300 - 252]
 });
 
 const shocked = analyseMarket(synthetic(1300, 0.1, 0.3), 1300 - 252);
@@ -96,8 +96,8 @@ if (symbol) {
       // Every overlay must already be defined on the first visible bar; a null
       // here means the warm-up window is too short.
       firstBarDefined: {
-        sma200: data.overlays!.sma200[0],
-        volatility: data.overlays!.volatility[0],
+        sma200: data.overlays!.sma200[data.overlays!.lead.length],
+        leadBars: data.overlays!.lead.length,
         logFit: Boolean(data.analytics.value.logFit)
       },
       payloadKB: Math.round(JSON.stringify(data).length / 1024)
