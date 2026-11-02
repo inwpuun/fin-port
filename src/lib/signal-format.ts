@@ -26,15 +26,19 @@ export function thaiDate(isoDate: string) {
   );
 }
 
-/** Calendar days from a bar's date to today, in words. */
-export function timeAgo(isoDate: string, now = new Date()) {
+/**
+ * Calendar days from a bar's date to today, in words. `suffix` picks the
+ * wording: "ที่แล้ว" (7 วันที่แล้ว) by default, "ก่อน" (7 วันก่อน) for the
+ * close report.
+ */
+export function timeAgo(isoDate: string, now = new Date(), suffix: "ที่แล้ว" | "ก่อน" = "ที่แล้ว") {
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const days = Math.max(0, Math.round((today - Date.parse(`${isoDate}T00:00:00Z`)) / DAY_MS));
   if (days === 0) return "วันนี้";
   if (days === 1) return "เมื่อวาน";
-  if (days < 14) return `${days} วันที่แล้ว`;
-  if (days < 60) return `${Math.round(days / 7)} สัปดาห์ที่แล้ว`;
-  return `${Math.round(days / 30)} เดือนที่แล้ว`;
+  if (days < 14) return `${days} วัน${suffix}`;
+  if (days < 60) return `${Math.round(days / 7)} สัปดาห์${suffix}`;
+  return `${Math.round(days / 30)} เดือน${suffix}`;
 }
 
 export type CdcRead = {

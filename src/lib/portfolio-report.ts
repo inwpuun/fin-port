@@ -270,7 +270,7 @@ export async function buildPortfolioReport(kind: ReportKind, now = new Date(), p
   const block = (row: Row) => {
     const { gain: rowGain, invested: rowInvested } = row.period;
     const signal = row.read.last
-      ? `${row.read.last.type === "buy" ? "BUY" : "SELL"} since ${thaiDate(row.read.last.time)} (${timeAgo(row.read.last.time)})`
+      ? `${row.read.last.type === "buy" ? "BUY" : "SELL"} since ${thaiDate(row.read.last.time)} (${timeAgo(row.read.last.time, new Date(), "ก่อน")})`
       : "ยังไม่มีสัญญาณ";
     return [
       `${rowGain >= 0 ? "🟢" : "🔻"} ${row.data.symbol} ${percentOf(rowGain, rowInvested)} ${signed(rowGain, row.data.currency)}`,
