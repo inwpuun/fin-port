@@ -7,7 +7,7 @@ import { chartSeries } from "@/lib/indicators";
 import { sendLineText } from "@/lib/line";
 import { fetchMarketData } from "@/lib/market";
 import { getMyPortfolioSeed } from "@/lib/my-port";
-import { lastSignalText, mapLimited, money, readCdc, thaiDate, type CdcRead } from "@/lib/signal-format";
+import { mapLimited, money, readCdc, thaiDate, timeAgo, type CdcRead } from "@/lib/signal-format";
 import {
   addDays,
   isTradingDay,
@@ -178,10 +178,6 @@ function percentOf(gain: number, invested: number) {
   return percentFormat(invested ? (gain / invested) * 100 : 0);
 }
 
-function formatQuantity(quantity: number) {
-  return quantity.toLocaleString("en-US", { maximumFractionDigits: 4 });
-}
-
 export async function buildPortfolioReport(kind: ReportKind, now = new Date(), period: ReportPeriod = "day") {
   const clock = newYorkClock(now);
   const seeds = (await getMyPortfolioSeed()).filter((seed) => (seed.quantity ?? 0) > 0);
@@ -268,21 +264,19 @@ export async function buildPortfolioReport(kind: ReportKind, now = new Date(), p
 
   rows.sort((a, b) => b.period.gain - a.period.gain);
 
+  // 🟢/🔻 [symbol] [percent change] [price change]
+  // [BUY/SELL] since [date] ([time ago])
+  // [suggestion] [current price]
   const block = (row: Row) => {
-    const { basePrice, startQuantity, gain: rowGain, invested: rowInvested, trades: inside } = row.period;
-    const move = basePrice ? ((row.data.price - basePrice) / basePrice) * 100 : 0;
-    const lines = [
-      `${rowGain >= 0 ? "▲" : "▼"} ${row.data.symbol} ${signed(rowGain, row.data.currency)} (${percentOf(rowGain, rowInvested)})`,
-      `   ${money(row.data.price, row.data.currency)}${basePrice ? ` · ราคา ${percentFormat(move)}` : ""} · ${row.read.status}`
-    ];
-    for (const trade of inside) {
-      lines.push(
-        `   ${trade.side === "buy" ? "ซื้อ" : "ขาย"} ${formatQuantity(trade.quantity)} หุ้น ${thaiDate(trade.occurredOn)} @ ${money(trade.price, trade.currency)}`
-      );
-    }
-    if (inside.length && startQuantity === 0) lines.push("   (เริ่มถือในช่วงนี้ คิดจากราคาที่ซื้อจริง)");
-    lines.push(`   สัญญาณล่าสุด ${lastSignalText(row.read)}`);
-    return lines.join("\n");
+    const { gain: rowGain, invested: rowInvested } = row.period;
+    const signal = row.read.last
+      ? `${row.read.last.type === "buy" ? "BUY" : "SELL"} since ${thaiDate(row.read.last.time)} (${timeAgo(row.read.last.time)})`
+      : "ยังไม่มีสัญญาณ";
+    return [
+      `${rowGain >= 0 ? "🟢" : "🔻"} ${row.data.symbol} ${percentOf(rowGain, rowInvested)} ${signed(rowGain, row.data.currency)}`,
+      signal,
+      `${row.read.status} ${money(row.data.price, row.data.currency)}`
+    ].join("\n");
   };
 
   const dateText = new Intl.DateTimeFormat("th-TH", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }).format(
