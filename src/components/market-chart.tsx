@@ -134,6 +134,21 @@ function residualZ(candles: Candle[], windowStart: number, fit: LogFit | null): 
   }));
 }
 
+/**
+ * Candles drawn from the previous close rather than the session open, so an
+ * overnight gap shows as one long body instead of a jump in the chart -- the
+ * way many charting apps draw them. The wick is stretched to
+ * cover the new open. Display only: the regression, CDC and every statistic
+ * still read the real open, high and low.
+ */
+function connectCandles(candles: Candle[]): Candle[] {
+  return candles.map((candle, index) => {
+    if (index === 0) return candle;
+    const open = candles[index - 1].close;
+    return { ...candle, open, high: Math.max(candle.high, open), low: Math.min(candle.low, open) };
+  });
+}
+
 function gapFromSlow(candles: Candle[], slow?: Array<number | null>): LineData<Time>[] {
   if (!slow) return [];
   const points: LineData<Time>[] = [];
@@ -298,15 +313,16 @@ export function MarketChart({
           );
 
     if (chartType === "candles") {
+      const connected = connectCandles(candles);
       // CDC paints each bar its zone colour, the way the TradingView study does.
       const bars: CandlestickData<Time>[] = cdc
-        ? candles.map((candle, index) => {
+        ? connected.map((candle, index) => {
             const zone = cdc.zones[index];
             if (!zone) return candle;
             const color = cdcColors[zone];
             return { ...candle, color, wickColor: color, borderColor: color };
           })
-        : candles;
+        : connected;
       (price as ISeriesApi<"Candlestick">).setData(bars);
     } else {
       (price as ISeriesApi<"Area">).setData(candles.map((candle) => ({ time: candle.time, value: candle.close })));
@@ -366,8 +382,8 @@ export function MarketChart({
             segment.map((candle, offset) => ({ time: candle.time, value: at(start + offset, deviations) }))
           );
         }
-        // Carried on past the last bar to the chart's edge, like TradingView's
-        // "extend right": a canvas ray, so it reaches into empty space too.
+        // Carried on past both anchors to the chart's edges, like TradingView's
+        // "extend lines": drawn on the canvas, so it reaches into empty space too.
         price.attachPrimitive(new RegressionRay(trend, windowStart, trendColor));
 
         markers.push(
@@ -380,7 +396,7 @@ export function MarketChart({
             label: `Regression ${trend.direction === "high-to-low" ? "high -> low" : "low -> high"} · ${percentFormat(trend.changePercent)} · R ${trend.pearsonR.toFixed(2)}`
           },
           { color: colors.regressionEdge, label: `+/- ${REGRESSION_DEVIATIONS} std dev` },
-          { color: trendColor, label: "Regression extended to the edge", dashed: true }
+          { color: trendColor, label: "Regression extended edge to edge", dashed: true }
         );
       }
 
@@ -630,8 +646,8 @@ export function MarketChart({
 }
 
 /**
- * The regression line and its edges extended from the trend's last anchor to
- * the right edge of the pane. Sampled every few pixels through the price
+ * The regression line and its edges carried on past both anchors, to the left
+ * and right edges of the pane. Sampled every few pixels through the price
  * scale rather than drawn straight, so it stays true on a log axis.
  */
 class RegressionRay implements ISeriesPrimitive<Time> {
@@ -664,12 +680,19 @@ class RegressionRay implements ISeriesPrimitive<Time> {
     if (!params) return;
     const { chart, series } = params;
     const timeScale = chart.timeScale();
+    const startIndex = this.windowStart + this.trend.startIndex;
     const endIndex = this.windowStart + this.trend.endIndex;
 
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+      const startX = timeScale.logicalToCoordinate(startIndex as never);
       const endX = timeScale.logicalToCoordinate(endIndex as never);
-      const fromX = Math.max(endX ?? 0, 0);
-      if (endX !== null && endX > mediaSize.width) return;
+      if (startX === null || endX === null) return;
+
+      // Everything outside the fitted segment, both ways, clipped to the pane.
+      const spans: Array<[number, number]> = [
+        [0, Math.min(startX, mediaSize.width)],
+        [Math.max(endX, 0), mediaSize.width]
+      ].filter(([from, to]) => to - from > 1) as Array<[number, number]>;
 
       const lines: Array<{ deviations: number; color: string; width: number; dash: number[] }> = [
         { deviations: 0, color: this.color, width: 1.5, dash: [6, 4] },
@@ -683,19 +706,24 @@ class RegressionRay implements ISeriesPrimitive<Time> {
         context.strokeStyle = line.color;
         context.lineWidth = line.width;
         context.setLineDash(line.dash);
-        let started = false;
-        for (let x = fromX; x <= mediaSize.width + 4; x += 4) {
-          const logical = timeScale.coordinateToLogical(Math.min(x, mediaSize.width));
-          if (logical === null) continue;
-          const value = regressionAt(this.trend, Math.max(Number(logical), endIndex) - this.windowStart, line.deviations);
-          const y = value > 0 ? series.priceToCoordinate(value) : null;
-          if (y === null) {
-            started = false;
-            continue;
+
+        for (const [from, to] of spans) {
+          let started = false;
+          for (let step = from; ; step += 4) {
+            const x = Math.min(step, to);
+            const logical = timeScale.coordinateToLogical(x);
+            const value = logical === null ? null : regressionAt(this.trend, Number(logical) - this.windowStart, line.deviations);
+            // A log axis has no place for zero or below; the line just leaves the pane there.
+            const y = value !== null && value > 0 ? series.priceToCoordinate(value) : null;
+            if (y === null) {
+              started = false;
+            } else {
+              if (started) context.lineTo(x, y);
+              else context.moveTo(x, y);
+              started = true;
+            }
+            if (x >= to) break;
           }
-          if (started) context.lineTo(Math.min(x, mediaSize.width), y);
-          else context.moveTo(Math.min(x, mediaSize.width), y);
-          started = true;
         }
         context.stroke();
       }
