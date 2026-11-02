@@ -15,7 +15,11 @@ import {
   type CandlestickData,
   type IChartApi,
   type ISeriesApi,
+  type IPrimitivePaneRenderer,
+  type IPrimitivePaneView,
   type ISeriesMarkersPluginApi,
+  type ISeriesPrimitive,
+  type SeriesAttachedParameter,
   type LineData,
   type SeriesMarker,
   type SeriesType,
@@ -30,7 +34,8 @@ import {
   chartSeries,
   regressionAt,
   regressionTrend,
-  type CdcZone
+  type CdcZone,
+  type RegressionTrend
 } from "@/lib/indicators";
 import type { Candle, ChartView, MarketData } from "@/types/market";
 
@@ -361,12 +366,9 @@ export function MarketChart({
             segment.map((candle, offset) => ({ time: candle.time, value: at(start + offset, deviations) }))
           );
         }
-        // Where the line would be today if the move carried on.
-        if (end < candles.length - 1) {
-          line(trendColor, 1, LineStyle.Dotted).setData(
-            candles.slice(end).map((candle, offset) => ({ time: candle.time, value: at(end + offset) }))
-          );
-        }
+        // Carried on past the last bar to the chart's edge, like TradingView's
+        // "extend right": a canvas ray, so it reaches into empty space too.
+        price.attachPrimitive(new RegressionRay(trend, windowStart, trendColor));
 
         markers.push(
           { time: trend.high.time, position: "aboveBar", color: "rgba(237, 245, 255, 0.85)", shape: "circle", text: "High" },
@@ -378,7 +380,7 @@ export function MarketChart({
             label: `Regression ${trend.direction === "high-to-low" ? "high -> low" : "low -> high"} · ${percentFormat(trend.changePercent)} · R ${trend.pearsonR.toFixed(2)}`
           },
           { color: colors.regressionEdge, label: `+/- ${REGRESSION_DEVIATIONS} std dev` },
-          { color: trendColor, label: "Regression extended to today", dashed: true }
+          { color: trendColor, label: "Regression extended to the edge", dashed: true }
         );
       }
 
@@ -467,7 +469,9 @@ export function MarketChart({
 
     frameWindowRef.current = () => {
       if (!candles.length) return;
-      chart.timeScale().setVisibleLogicalRange({ from: windowStart - 0.5, to: candles.length - 0.5 + 2 });
+      // Some empty room on the right, where the regression ray runs on.
+      const room = view === "summary" ? Math.max(3, Math.round((candles.length - windowStart) * 0.08)) : 2;
+      chart.timeScale().setVisibleLogicalRange({ from: windowStart - 0.5, to: candles.length - 0.5 + room });
     };
     if (keepRange) {
       chart.timeScale().setVisibleLogicalRange(keepRange);
@@ -623,6 +627,81 @@ export function MarketChart({
       {measurement && <MeasurementOverlay currency={data?.currency || "USD"} measurement={measurement} />}
     </div>
   );
+}
+
+/**
+ * The regression line and its edges extended from the trend's last anchor to
+ * the right edge of the pane. Sampled every few pixels through the price
+ * scale rather than drawn straight, so it stays true on a log axis.
+ */
+class RegressionRay implements ISeriesPrimitive<Time> {
+  private params: SeriesAttachedParameter<Time> | null = null;
+  private readonly view: IPrimitivePaneView;
+
+  constructor(
+    private readonly trend: RegressionTrend,
+    private readonly windowStart: number,
+    private readonly color: string
+  ) {
+    const renderer: IPrimitivePaneRenderer = { draw: (target) => this.draw(target) };
+    this.view = { renderer: () => renderer };
+  }
+
+  attached(params: SeriesAttachedParameter<Time>) {
+    this.params = params;
+  }
+
+  detached() {
+    this.params = null;
+  }
+
+  paneViews() {
+    return [this.view];
+  }
+
+  private draw(target: Parameters<IPrimitivePaneRenderer["draw"]>[0]) {
+    const params = this.params;
+    if (!params) return;
+    const { chart, series } = params;
+    const timeScale = chart.timeScale();
+    const endIndex = this.windowStart + this.trend.endIndex;
+
+    target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+      const endX = timeScale.logicalToCoordinate(endIndex as never);
+      const fromX = Math.max(endX ?? 0, 0);
+      if (endX !== null && endX > mediaSize.width) return;
+
+      const lines: Array<{ deviations: number; color: string; width: number; dash: number[] }> = [
+        { deviations: 0, color: this.color, width: 1.5, dash: [6, 4] },
+        { deviations: REGRESSION_DEVIATIONS, color: colors.regressionEdge, width: 1, dash: [3, 4] },
+        { deviations: -REGRESSION_DEVIATIONS, color: colors.regressionEdge, width: 1, dash: [3, 4] }
+      ];
+
+      context.save();
+      for (const line of lines) {
+        context.beginPath();
+        context.strokeStyle = line.color;
+        context.lineWidth = line.width;
+        context.setLineDash(line.dash);
+        let started = false;
+        for (let x = fromX; x <= mediaSize.width + 4; x += 4) {
+          const logical = timeScale.coordinateToLogical(Math.min(x, mediaSize.width));
+          if (logical === null) continue;
+          const value = regressionAt(this.trend, Math.max(Number(logical), endIndex) - this.windowStart, line.deviations);
+          const y = value > 0 ? series.priceToCoordinate(value) : null;
+          if (y === null) {
+            started = false;
+            continue;
+          }
+          if (started) context.lineTo(Math.min(x, mediaSize.width), y);
+          else context.moveTo(Math.min(x, mediaSize.width), y);
+          started = true;
+        }
+        context.stroke();
+      }
+      context.restore();
+    });
+  }
 }
 
 /**
