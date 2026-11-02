@@ -28,10 +28,10 @@ export function thaiDate(isoDate: string) {
 
 /**
  * Calendar days from a bar's date to today, in words. `suffix` picks the
- * wording: "ที่แล้ว" (7 วันที่แล้ว) by default, "ก่อน" (7 วันก่อน) for the
- * close report.
+ * wording: "ที่แล้ว" (7 วันที่แล้ว) by default, "" (7 วัน) for the close
+ * report.
  */
-export function timeAgo(isoDate: string, now = new Date(), suffix: "ที่แล้ว" | "ก่อน" = "ที่แล้ว") {
+export function timeAgo(isoDate: string, now = new Date(), suffix: "ที่แล้ว" | "" = "ที่แล้ว") {
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const days = Math.max(0, Math.round((today - Date.parse(`${isoDate}T00:00:00Z`)) / DAY_MS));
   if (days === 0) return "วันนี้";
