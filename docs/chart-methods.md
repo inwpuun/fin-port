@@ -233,9 +233,9 @@ five facts that produced it so the number can be argued with.
   the data, so not implementable, so not included.
 - **Intraday and volume-profile work.** The data source is daily bars, and the
   intended holding period is quarters.
-- **Alerts and browser notifications.** They were removed: an alert that only
-  fires while a browser tab is open is not a monitoring system, and the metrics
-  above are what the page is for.
+- **Browser notifications.** They were removed: an alert that only fires while
+  a browser tab is open is not a monitoring system. The server now sends CDC
+  ActionZone BUY/SELL on watchlist symbols to LINE instead (see the README).
 
 ## Data and warm-up
 

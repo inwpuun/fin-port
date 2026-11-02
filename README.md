@@ -567,14 +567,65 @@ regression trend are computed in the browser from those bars. The regression cha
 the three numbers in `analytics.value.logFit`, and a route only pays for
 overlays if it asks with `overlays=1` -- the tables do not.
 
-### Alerts were removed
+### LINE alerts for buy/sell signals
 
-`/` used to arm a price threshold and a drawdown threshold and raise browser
-notifications. That is gone, along with the notification permission toggle: an
-alert that only fires while a tab happens to be open is not a monitoring
-system. The drawdown *measurement* stayed -- `previousTop`, `drawdownPercent`
-and the top-window selector are still on `/`, `/portfolio` and `/watchlist`, and
-the Summary panel reports the same fall against the whole loaded history.
+`/` used to raise browser notifications, which only fired while a tab was open.
+The server now does the watching instead: every
+`SIGNAL_ALERT_INTERVAL_MINUTES` (default 30) it loads each watchlist symbol on
+the Summary lens's default range (1Y, warm-up included) and sends a LINE message
+when CDC ActionZone prints a **BUY** or **SELL** on one of the last two daily
+bars. The message also says where price sits against the regression trend, in
+standard deviations. Each signal is sent once: `signal_notifications` records
+what went out, keyed by symbol, bar date and side. If a send fails, the signal
+is retried on the next check. Symbols Yahoo cannot price are skipped. The
+offline demo series is never used here.
+
+A signal on today's bar is computed from an unfinished bar, just as on the
+chart, so it can still disappear before the close.
+
+Setup, in `.env`:
+
+| Variable | |
+| --- | --- |
+| `LINE_CHANNEL_ID`, `LINE_CHANNEL_SECRET` | Messaging API channel. Each send issues a 15-minute stateless token from these, so there is no long-lived token to rotate. Without them the scheduler stays off. |
+| `LINE_TO` | Optional user or group ID to push to. Unset, the message is **broadcast** to everyone who has added the bot. |
+| `SIGNAL_ALERT_INTERVAL_MINUTES` | Optional, default 30. `0` turns the scheduler off. |
+
+Then run `npm run db:migrate` (for `0004_signal_notifications.sql`) and add the
+bot as a LINE friend. To check by hand:
+
+```bash
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE/api/alerts/signals?test=1"                  # test message
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE/api/alerts/signals?dryRun=1&lookback=30"    # preview, sends nothing
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE/api/alerts/signals"                         # check and send now
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE/api/alerts/signals?digest=1"                # every symbol's last BUY/SELL, as one message
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE/api/alerts/signals?report=close"           # portfolio report now (dryRun=1 to preview)
+```
+
+**Portfolio report at the US close.** On weekdays at 16:05
+New York time (so daylight saving is handled), every holding with a quantity is
+priced and sent as one message. Each holding shows the day's change in percent
+and dollars, its CDC status, and its last BUY/SELL with how long ago it was.
+The message starts with the portfolio's day change, its value and its total
+gain. In Bangkok that is 03:05 while the US is on summer time and 04:05 in
+winter. A weekday with no US equity bar dated today is a
+holiday and is skipped. `portfolio_reports` (migration 0005) claims each slot,
+so a restart cannot send it twice. If the Pi was down at the bell, the report
+still goes out for up to an hour afterwards. `PORTFOLIO_REPORT=0` turns it off.
+
+**Gains are real.** Each period's gain is today's value, less the position at
+the start of the period at that day's close, less what was bought, plus what
+was sold, less fees. The starting position is rebuilt from the trade log, so a
+position bought mid-week counts only from the price actually paid, and each
+trade inside the period is listed under its holding.
+
+**The week's last trading day reports the week** (Friday, or Thursday when
+Friday is an NYSE holiday such as Good Friday). It is measured from the last
+close before Monday. **The week holding the month's last Friday reports the
+month** instead. That report runs from the previous month's report day, and
+its header carries the week as well. Trading days after the last Friday belong
+to the next month. Holidays come from `src/lib/us-market-calendar.ts`, which
+implements NYSE's published rules. Test with `?report=close&period=week` or `&period=month`.
 
 ## Docker
 

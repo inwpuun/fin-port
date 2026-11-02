@@ -43,6 +43,21 @@ export function hasDatabaseUrl(): boolean {
   return Boolean(process.env.DATABASE_URL);
 }
 
+/**
+ * LINE Messaging API channel. The ID and secret are enough on their own: every
+ * send issues a stateless 15-minute channel access token from them, so there
+ * is no long-lived token to rotate. LINE_TO is a user or group ID to push to;
+ * without it the message is broadcast to everyone who added the bot.
+ */
+export type LineConfig = { channelId: string; channelSecret: string; to: string | null };
+
+export function lineConfig(): LineConfig | null {
+  const channelId = process.env.LINE_CHANNEL_ID?.trim();
+  const channelSecret = process.env.LINE_CHANNEL_SECRET?.trim();
+  if (!channelId || !channelSecret) return null;
+  return { channelId, channelSecret, to: process.env.LINE_TO?.trim() || null };
+}
+
 export function adminToken(): string {
   const token = required("ADMIN_TOKEN");
 
