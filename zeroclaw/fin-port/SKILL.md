@@ -1,183 +1,116 @@
 ---
 name: fin-port
-description: Read and edit Puun's investment portfolio in fin-port — summarize holdings, prices, profit and net worth; record, fix or delete buy/sell trades; update cash; manage the watchlist. Use for any question about "พอร์ต", หุ้นที่ถือ, กำไร/ขาดทุน, ราคาหุ้น, net worth, or a trade to record.
-version: 1.0.0
+description: Read and edit Puun's investment portfolio in fin-port through the `finport__*` MCP tools — summarize holdings, prices, profit and net worth; record, fix or delete buy/sell trades; update cash; manage the watchlist. Use for any question about พอร์ต, หุ้นที่ถือ, กำไร/ขาดทุน, ราคาหุ้น, ทอง, BTC, net worth, or a trade to record.
+version: 2.0.0
 author: puunp
 tags: [finance, portfolio, stocks]
 ---
 
 # fin-port
 
-fin-port is the portfolio tracker (Next.js + Postgres). It holds US stocks,
-ETFs, gold (`GOLD`), bitcoin (`BTC`) and cash in USD and THB. Every change goes
-through its HTTP API, called with the `finport` helper (installed at
-`~/.local/bin/finport`; use that full path if `finport` is not found):
+fin-port is the investment tracker: US stocks and ETFs, gold (`GOLD`),
+bitcoin (`BTC`, bought in baht) and cash in USD and THB. Reach it only through
+the `finport__*` MCP tools. Don't call its HTTP API with the shell.
 
-```sh
-finport METHOD /api/path ['json body']
-```
+fin-port is **not** Firefly. Firefly (`firefly__*`) is the daily spending
+ledger in baht. fin-port is investments. "ซื้อ NVDA" goes to fin-port, and
+"ข้าวเที่ยง 120" goes to Firefly. Baht cash in fin-port is rebuilt from
+Firefly, so record baht spending in Firefly, never as a fin-port withdrawal.
 
-`finport` reads the URL and the passphrase from `~/.config/fin-port/env`.
-Never print, echo or ask for the passphrase, and never put it in a command.
-The helper prints the JSON response; on an HTTP error it exits 1 and the body
-is `{"error": "..."}`. Read that message and tell the user what it says; it is
-written to be shown as-is.
-
-Answer in Thai unless the user writes in English. Money in baht is `฿12,345`,
-in dollars `$1,234.56`; percentages to two decimals with a sign (`+3.25%`).
+Answer in Thai unless the user writes in English. Write baht as `฿12,345`,
+dollars as `$1,234.56`, and percentages with a sign and two decimals (`+3.25%`).
 
 ## Rules
 
-1. **Read freely, confirm before writing.** Before any POST, PATCH or DELETE,
-   show the user exactly what will be written (symbol, side, quantity, price,
-   fee, currency, date) and wait for a yes. One confirmation covers one write.
+1. **Read freely. Confirm before writing.** Before `record_transaction`,
+   `update_transaction`, `delete_transaction`, `set_cash_balances` or
+   `set_allocation`, show exactly what will be written (symbol, side,
+   quantity, price, fee, currency, date) and wait for a yes. One yes covers
+   one write. If several trades are given at once, list them all first and
+   then write them one by one.
 2. **Never guess a trade.** If the quantity, price or date is missing, ask.
-   "Today" means today's date in Asia/Bangkok. Dates are `YYYY-MM-DD`; the API
-   also takes Thai `d/m/yy` in the Buddhist era (`3/10/69` = 2026-10-03).
-   Future dates are rejected.
-3. **Ids change on edit.** A PATCH returns the row with a new `transaction.id`;
-   the old id stops existing. Always look up the current id before editing or
-   deleting. Never reuse an id from earlier in the conversation without
-   re-reading it.
-4. After a write, re-read what changed (the holding or the summary) and report
-   the new figure, not the one you expected.
+   "Today" is today in Asia/Bangkok. Dates are `YYYY-MM-DD`. Thai `d/m/yy` in
+   the Buddhist era also works (`3/10/69` = 2026-10-03). Future dates are
+   rejected.
+3. **Ids change on edit.** `update_transaction` returns the row with a NEW
+   `transaction.id`, and the old id stops existing. Always look up the id with
+   `list_transactions` right before editing or deleting. Never reuse an id from
+   earlier in the conversation.
+4. **Report what the tool returned.** It returns the new holding. Say that
+   figure, not the one you expected. A tool error is a plain sentence written
+   for the user (for example "Cannot sell 10 NVDA on 2026-11-02: only 5.03
+   held then"). Pass it on and ask how to proceed. Don't retry the same call.
 
-## Read the portfolio
+## Tools
 
-| Want | Call |
+| Need | Tool |
 | --- | --- |
-| Whole port, priced, in baht | `finport GET /api/portfolio/summary` |
-| Same in dollars | `finport GET '/api/portfolio/summary?currency=USD'` |
-| Some holdings only | `finport GET '/api/portfolio/summary?symbols=NVDA,BTC'` |
-| Positions without prices (fast) | `finport GET /api/portfolio/holdings` |
-| Last close of any symbol | `finport GET '/api/market/prices?symbols=AAPL,THB=X'` |
-| Price, drawdown and signal of any symbol | `finport GET '/api/market/summary?symbols=TSLA'` |
-| USD/THB reference rate (BOT) | `finport GET /api/exchange-rate/usd-thb` |
-| Net worth per day since the first trade | `finport GET /api/portfolio/history` |
-| Watchlist | `finport GET /api/watchlist/my-watchlist` |
-| Allocation lanes | `finport GET /api/allocation` |
-| Is the server healthy | `finport GET /api/health` |
+| Whole port, priced (default THB) | `get_portfolio_summary` (`currency: "USD"` for dollars) |
+| One or a few holdings, priced | `get_portfolio_summary` with `symbols` |
+| Positions, average cost, cash, no prices | `list_holdings` |
+| Net worth over time | `get_net_worth_history` (`every`: day / week / month, `from`) |
+| Trades | `list_transactions` (`symbol`, `sides`, `from`, `to`, `limit`, or `id`) |
+| Record a buy/sell/dividend/fee or a cash deposit/withdraw | `record_transaction` |
+| Fix a trade | `update_transaction` (id + only the fields that change) |
+| Remove a trade | `delete_transaction` |
+| Set cash totals | `set_cash_balances` (send both usd and thb) |
+| Price of anything | `get_prices` (`THB=X` = baht per dollar) |
+| Trend, drawdown, verdict for a symbol | `get_market_analysis` |
+| BOT USD/THB rate | `get_usd_thb_rate` |
+| Watchlist | `list_watchlist`, `add_to_watchlist`, `remove_from_watchlist` |
+| Allocation lanes | `list_allocation`, `set_allocation` |
 
-`/api/portfolio/summary` returns:
+Prices are the last daily close from Yahoo. While the US market is open,
+that is still yesterday's close. Say so if the user asks for a live price.
 
-- `totals`: `marketValue`, `costBasis`, `profitLoss`, `profitLossPercent`,
-  `dayChange`, `dayChangePercent`, and for the whole port also `cash`,
-  `netWorth` (holdings + cash) and `moneyIn` (cost + cash). All money is in
-  `currency`.
-- `holdings[]`, largest first: `symbol`, `name`, `category`, `quantity`,
-  `averageCost` (in `costCurrency`), `price` and `previousClose` (in
-  `priceCurrency`), `priceChangePercent`, `marketValue`, `costBasis`,
-  `profitLoss`, `profitLossPercent`, `dayChange`, `weightPercent`,
-  `drawdownPercent` (from the one-year high), `signal.label`/`signal.bias`.
-- `fx`: the rates used. `errors`: symbols that could not be priced. They are
-  left out of the totals, so always mention them.
+## Recipes
 
-Prices are the last daily close from Yahoo (cached a minute). During US
-market hours that is the previous close; say so if the user asks for a "live"
-price.
+### สรุปพอร์ต
 
-### Summarizing the port
-
-When asked for a summary (สรุปพอร์ต), call the summary once and reply with:
+Call `get_portfolio_summary` once and reply in this shape:
 
 ```
-💼 พอร์ต ณ <date>
-มูลค่าสุทธิ ฿<netWorth> (หุ้น ฿<marketValue> + เงินสด ฿<cash>)
+💼 พอร์ต ณ <d MMM yyyy>
+มูลค่าสุทธิ ฿<netWorth>  (หุ้น ฿<marketValue> + เงินสด ฿<cash>)
 กำไรรวม <+฿profitLoss> (<+profitLossPercent>%)
 วันนี้ <+฿dayChange> (<+dayChangePercent>%)
 
-🟢/🔻 <SYMBOL> ฿<marketValue> · <+profitLossPercent>% · วันนี้ <+priceChangePercent>%
-... (every holding, largest first; 🟢 for profit, 🔻 for loss)
+🟢 VOO ฿68,983 · +16.83% · วันนี้ +0.54%
+🔻 XYZ ฿1,234 · -4.10% · วันนี้ -1.20%
+…every holding, largest first. 🟢 = in profit, 🔻 = at a loss.
 ```
 
-Add a line for `errors` if not empty. For "หุ้นไหนกำไร/ขาดทุนมากสุด", sort
-`holdings` by `profitLossPercent` or `profitLoss` yourself. For "ถือ X เท่าไร",
-use the summary with `?symbols=X`.
+If `errors` is not empty, add a line naming those symbols: they are left out
+of the totals. For "ตัวไหนกำไร/ขาดทุนมากสุด", sort `holdings` yourself by
+`profitLossPercent` (or by `profitLoss` for money). For "สัดส่วน/allocation",
+group `holdings` by `category` and add up `weightPercent`.
 
-## The trade log (CRUD)
+### ถือ X เท่าไร / X ตอนนี้เท่าไร
 
-A position is built from its trades: every buy/sell rebuilds that symbol's
-holding (quantity and average cost). Cash is `deposit`/`withdraw` rows on the
-`CASH` symbol.
+Call `get_portfolio_summary` with `symbols: ["X"]`. Report the quantity,
+average cost, price, value and P/L. If X is not held, use `get_prices`.
 
-Fields: `symbol`, `side` (`buy` `sell` `dividend` `fee` `deposit` `withdraw`),
-`quantity` (shares, or the amount for cash), `price` (per unit), `fee`
-(optional, total), `currency` (`USD` default; cash is `USD` or `THB`),
-`occurredOn`, `note` (optional), `category` (optional allocation lane for a
-first buy).
+### ซื้อ/ขาย (record a trade)
 
-### List / find
+"ซื้อ NVDA 0.5 หุ้น ที่ 180.25 เมื่อวาน ค่าธรรมเนียม 0.1" →
+`record_transaction` `{ side: "buy", symbol: "NVDA", quantity: 0.5, price: 180.25, fee: 0.1, occurredOn: "<yesterday>" }`.
+When the user gives an amount instead of shares ("ซื้อ NVDA 100 ดอลลาร์ ที่
+180"), quantity = amount / price, rounded to 7 decimals. Show it before
+writing. For a symbol with no holding yet, ask for a lane (`category`) or
+offer the closest one from `list_allocation`.
+BTC trades are in baht: `currency: "THB"`, price = baht per 1 BTC.
 
-```sh
-finport GET '/api/portfolio/transactions?symbol=NVDA&limit=10'
-finport GET '/api/portfolio/transactions?side=buy,sell&from=2026-10-01&to=2026-10-31'
-finport GET '/api/portfolio/transactions?id=<id>'
-```
+### แก้/ลบรายการ
 
-Newest first. `total` is the count before `limit`. `symbol` matches every
-spelling (`BRK.B` = `BRK-B`, `GOLD` = `GC=F`, `BTC` = `BTC-USD`).
+1. `list_transactions` with `symbol` and a date range to find the row.
+2. Show the row and the change, and get a yes.
+3. `update_transaction` with the id and only the changed fields, or
+   `delete_transaction`.
+4. Report the holding from the result.
 
-### Create
+## Don't
 
-```sh
-finport POST /api/portfolio/transactions '{"symbol":"NVDA","side":"buy","quantity":0.5,"price":180.25,"fee":0,"currency":"USD","occurredOn":"2026-11-03"}'
-finport POST /api/portfolio/transactions '{"symbol":"AMD","side":"buy","quantity":1,"price":160,"occurredOn":"2026-11-03","category":"Future Hardware"}'
-finport POST /api/portfolio/transactions '{"side":"deposit","quantity":5000,"currency":"THB","occurredOn":"2026-11-03"}'
-```
-
-A sell larger than what was held on that date is rejected. Bitcoin bought in
-baht is `"symbol":"BTC","currency":"THB"` with the baht price per 1 BTC; one
-symbol cannot mix currencies.
-
-### Update
-
-Find the row, show it, confirm, then send only the fields that change:
-
-```sh
-finport PATCH '/api/portfolio/transactions?id=<id>' '{"price":182.10}'
-finport PATCH '/api/portfolio/transactions?id=<id>' '{"quantity":0.6,"occurredOn":"2026-11-02"}'
-finport PATCH '/api/portfolio/transactions?id=<id>' '{"symbol":"GOOGL"}'
-```
-
-Changing the symbol rebuilds both positions. An edit that would make a later
-sell exceed what was held is rejected and nothing changes. The response has
-`transaction` (new row, new id) and `previous` (the row as it was).
-
-### Delete
-
-```sh
-finport DELETE '/api/portfolio/transactions?id=<id>'
-```
-
-The holding is rebuilt from the trades that remain; deleting the only buy
-removes the holding.
-
-## Cash
-
-```sh
-finport POST /api/portfolio/cash '{"usd":1300.28,"thb":51577.16,"occurredOn":"2026-11-03"}'
-```
-
-Sets both balances to these figures by recording the difference. Send both,
-reading the current ones from `/api/portfolio/holdings` (`cash`) first. THB
-cash is rebuilt from the cash book (Firefly III) whenever the book changes,
-so a THB change here only lasts until the next sync; tell the user to record
-baht spending in Firefly instead.
-
-## Watchlist and allocation
-
-```sh
-finport POST /api/watchlist/my-watchlist '{"symbol":"AVGO"}'
-finport DELETE '/api/watchlist/my-watchlist?symbol=AVGO'
-finport POST /api/allocation '{"symbol":"NVDA","category":"AI"}'   # move a holding to another lane
-```
-
-## Things to avoid
-
-- `DELETE /api/portfolio/my-port` removes a holding **and all of its trades**.
-  Do not call it; delete individual transactions instead, unless the user
-  explicitly asks to remove the whole position and confirms.
-- Do not loop over many writes without showing the full list first.
-- A 401 means the passphrase is wrong, or this host has failed 20 times in 10
-  minutes and is locked out for the rest of that window. Do not retry in a
-  loop; tell the user.
+- Don't record baht spending or income in fin-port. That belongs in Firefly.
+- Don't use the shell or curl for fin-port.
+- Don't delete a whole position by deleting its trades in a loop unless the
+  user asks for exactly that and has seen the list.

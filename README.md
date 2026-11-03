@@ -416,29 +416,48 @@ Yahoo cannot price is named in `errors` and left out of the totals. With
 Only *failed* bearer attempts count against the limit (20 per 10 minutes per
 client), so an agent with the right token can call as often as it needs.
 
-### ZeroClaw agent
+### MCP, and the ZeroClaw agent
 
-`zeroclaw/fin-port/` is a skill for the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw)
-agent on the Pi: `SKILL.md` teaches it every route above, and `finport` is the
-curl wrapper it calls. ZeroClaw's shell tool starts from an empty environment
-and never passes `*_TOKEN` variables through, so the passphrase lives in a
-file the wrapper reads:
+`/api/mcp` serves the same API as an [MCP](https://modelcontextprotocol.io)
+server (Streamable HTTP, stateless, JSON responses) behind the same bearer
+token. Each tool calls the REST handler above with the caller's headers, so
+validation cannot drift; writes return only the row and the holding they
+touched instead of the whole log.
 
-```sh
-# on the Pi
-mkdir -p ~/.config/fin-port ~/.local/bin
-install -m 600 /dev/null ~/.config/fin-port/env
-printf 'FIN_PORT_URL=http://localhost:3000\nFIN_PORT_TOKEN=%s\n' '<ADMIN_TOKEN>' > ~/.config/fin-port/env
-install -m 755 zeroclaw/fin-port/finport ~/.local/bin/finport
-# the skill goes in the agent's workspace (or a shared bundle):
-mkdir -p <install>/agents/<alias>/workspace/skills/fin-port
-cp zeroclaw/fin-port/SKILL.md <install>/agents/<alias>/workspace/skills/fin-port/
-finport GET /api/health      # check it answers
+| Tool | REST |
+| --- | --- |
+| `get_portfolio_summary`, `list_holdings`, `get_net_worth_history` (sampled by day/week/month) | `/api/portfolio/summary`, `/holdings`, `/history` |
+| `list_transactions`, `record_transaction`, `update_transaction`, `delete_transaction` | `/api/portfolio/transactions` |
+| `set_cash_balances` | `/api/portfolio/cash` |
+| `get_prices`, `get_market_analysis`, `get_usd_thb_rate` | `/api/market/prices`, `/api/market/summary`, `/api/exchange-rate/usd-thb` |
+| `list_watchlist`, `add_to_watchlist`, `remove_from_watchlist` | `/api/watchlist/my-watchlist` |
+| `list_allocation`, `set_allocation` | `/api/allocation` |
+
+The [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) agent on the Pi
+(`luna`) uses it as an MCP server, because its sandboxed shell treats `curl`
+as a high-risk command. `zeroclaw/fin-port/SKILL.md` is its skill: when to
+use which tool, the confirm-before-write rules, and the Thai summary format.
+On the Pi, in `~/.zeroclaw/config.toml`:
+
+```toml
+[[mcp.servers]]
+name = "finport"
+transport = "http"
+url = "http://127.0.0.1:3000/api/mcp"
+tool_timeout_secs = 60
+
+[mcp.servers.headers]
+Authorization = "Bearer <ADMIN_TOKEN>"
+
+[mcp_bundles.portfolio]
+servers = ["finport"]
 ```
 
-If the agent's risk profile sets `allowed_commands`, add `finport` (or its
-full path) to it. Use `FIN_PORT_URL=http://puun-pi.local:3000` instead when
-the agent runs on another machine.
+then add `"portfolio"` to `agents.luna.mcp_bundles`, add
+`finport__delete_transaction` and `finport__remove_from_watchlist` to the risk
+profile's `always_ask`, copy the skill into
+`~/.zeroclaw/agents/luna/workspace/skills/fin-port/`, and
+`systemctl --user restart zeroclaw`.
 
 ## Diagnosing a deployment
 
