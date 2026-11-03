@@ -393,11 +393,52 @@ Nothing but `/unlock` and static assets answers without one.
 | `GET` | `/api/exchange-rate/usd-thb` | BOT reference rate |
 | `GET` `POST` `DELETE` | `/api/watchlist/my-watchlist` | saved symbols |
 | `POST` `DELETE` | `/api/portfolio/my-port` | required | upsert or remove a holding, and its allocation lane (remove also deletes its trades) |
-| `GET` `POST` `DELETE` | `/api/portfolio/transactions` | required | list, record (`side`: buy, sell, deposit, withdraw) or delete (`?id=`) a transaction |
+| `GET` | `/api/portfolio/holdings` | open positions with quantity, cost, average cost, lane and trade count, plus cash; no market calls |
+| `GET` | `/api/portfolio/summary?currency=THB\|USD&symbols=` | the portfolio priced at the last close: per-holding value, P/L, day change, weight, drawdown, signal; totals with cash and net worth |
+| `GET` `POST` `PATCH` `DELETE` | `/api/portfolio/transactions` | list (filters: `?id=`, `?symbol=`, `?side=buy,sell`, `?from=&to=`, `?limit=`), record (`side`: buy, sell, dividend, fee, deposit, withdraw), edit (`?id=` + the fields that change) or delete (`?id=`) a transaction |
 | `POST` | `/api/portfolio/cash` | required | set the USD and THB cash balances |
 | `GET` | `/api/portfolio/history` | required | daily net worth and money in since the first trade |
 | `GET` `POST` `DELETE` | `/api/allocation` | required | move a symbol between lanes, edit the cash balance |
 | `POST` | `/api/cash-book/refresh` | required | re-read the cash book from Firefly III now |
+
+Editing a transaction gives it a new id, because ids are content hashes; the
+response carries the new row as `transaction` and the old one as `previous`.
+The row keeps its `created_at`, so it stays in place among same-day trades.
+Both the old and the new position are rebuilt, and an edit that would make a
+later sell exceed what was held is rolled back whole.
+
+`/api/portfolio/summary` values the portfolio the way `/portfolio` does, so
+the two agree: THB amounts convert to USD at Yahoo's `THB=X`, and the baht
+figures use the Bank of Thailand rate (falling back to `THB=X`). A symbol
+Yahoo cannot price is named in `errors` and left out of the totals. With
+`?symbols=` the totals cover only those holdings and leave cash out.
+
+Only *failed* bearer attempts count against the limit (20 per 10 minutes per
+client), so an agent with the right token can call as often as it needs.
+
+### ZeroClaw agent
+
+`zeroclaw/fin-port/` is a skill for the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw)
+agent on the Pi: `SKILL.md` teaches it every route above, and `finport` is the
+curl wrapper it calls. ZeroClaw's shell tool starts from an empty environment
+and never passes `*_TOKEN` variables through, so the passphrase lives in a
+file the wrapper reads:
+
+```sh
+# on the Pi
+mkdir -p ~/.config/fin-port ~/.local/bin
+install -m 600 /dev/null ~/.config/fin-port/env
+printf 'FIN_PORT_URL=http://localhost:3000\nFIN_PORT_TOKEN=%s\n' '<ADMIN_TOKEN>' > ~/.config/fin-port/env
+install -m 755 zeroclaw/fin-port/finport ~/.local/bin/finport
+# the skill goes in the agent's workspace (or a shared bundle):
+mkdir -p <install>/agents/<alias>/workspace/skills/fin-port
+cp zeroclaw/fin-port/SKILL.md <install>/agents/<alias>/workspace/skills/fin-port/
+finport GET /api/health      # check it answers
+```
+
+If the agent's risk profile sets `allowed_commands`, add `finport` (or its
+full path) to it. Use `FIN_PORT_URL=http://puun-pi.local:3000` instead when
+the agent runs on another machine.
 
 ## Diagnosing a deployment
 

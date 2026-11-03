@@ -471,6 +471,72 @@ export async function deleteTransaction(db: Db, id: string): Promise<Transaction
   return { transaction, open };
 }
 
+export type TransactionPatch = Partial<Omit<TransactionInput, "note">> & { note?: string | null };
+
+export type TransactionUpdateResult = TransactionWriteResult & {
+  /** The row as it was before the edit. */
+  previous: HoldingTransaction;
+  /** Whether the position the row used to belong to is still open (only differs when the symbol changed). */
+  previousOpen: boolean;
+};
+
+export async function getTransaction(db: Db, id: string): Promise<HoldingTransaction | null> {
+  const { rows } = await db.query<TransactionRow>(`select ${SELECT_COLUMNS} from holding_transactions where id = $1`, [id]);
+  return rows[0] ? rowToTransaction(rows[0]) : null;
+}
+
+/**
+ * Edits one row of the log. Fields left out keep their value.
+ *
+ * Ids are content hashes, so the edited row gets a new id; the old one stops
+ * existing. The row keeps its `created_at`, so it does not jump behind other
+ * trades recorded on the same day. Both the old and the new position are
+ * rebuilt, so moving a trade to another symbol fixes both holdings.
+ *
+ * Run inside a transaction: an edit that makes a later sell exceed what was
+ * held, or takes cash below zero, throws and must leave nothing behind.
+ */
+export async function updateTransaction(db: Db, id: string, patch: TransactionPatch): Promise<TransactionUpdateResult | null> {
+  const { rows } = await db.query<TransactionRow & { created_at: Date }>(
+    `delete from holding_transactions where id = $1 returning ${SELECT_COLUMNS}, created_at`,
+    [id]
+  );
+  if (!rows.length) return null;
+
+  const previous = rowToTransaction(rows[0]);
+  const pick = <K extends keyof TransactionPatch>(key: K, fallback: TransactionPatch[K]) =>
+    patch[key] === undefined ? fallback : patch[key];
+
+  const next = normalizeTransaction({
+    symbol: pick("symbol", previous.symbol),
+    side: pick("side", previous.side) as string,
+    quantity: pick("quantity", previous.quantity) as number,
+    price: pick("price", previous.price),
+    fee: pick("fee", previous.fee),
+    currency: pick("currency", previous.currency),
+    occurredOn: pick("occurredOn", previous.occurredOn) as string,
+    note: pick("note", previous.note)
+  });
+
+  const samePosition =
+    isPositionTrade(previous) && isPositionTrade(next) && symbolKey(previous.symbol) === symbolKey(next.symbol);
+
+  // Moving onto a symbol whose holding was entered by hand: carry that
+  // holding into the log first, exactly as a first trade would.
+  if (isPositionTrade(next) && !samePosition) await ensureOpeningPosition(db, next.symbol, next.occurredOn);
+  if (isCashSide(next.side) && !isCashSide(previous.side)) await ensureOpeningCash(db, next.occurredOn);
+
+  const [transaction] = await insertTransactions(db, [next]);
+  await db.query(`update holding_transactions set created_at = $2 where id = $1`, [transaction.id, rows[0].created_at]);
+
+  const open = isPositionTrade(transaction) ? await recomputeHolding(db, transaction.symbol) : true;
+  const previousOpen =
+    isPositionTrade(previous) && !samePosition ? await recomputeHolding(db, previous.symbol) : open;
+  if (isCashSide(previous.side) || isCashSide(transaction.side)) await assertCashNeverNegative(db);
+
+  return { transaction, open, previous, previousOpen };
+}
+
 /**
  * Sets both cash balances to the given figures by recording the difference
  * as a deposit or withdrawal today, so the history keeps every change.

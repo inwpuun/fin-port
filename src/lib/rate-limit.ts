@@ -56,6 +56,12 @@ export function rateLimit(key: string, limit: number, windowMs: number): RateLim
   return { ok: true, remaining: limit - existing.count, retryAfterSeconds: 0 };
 }
 
+/** True when `key` has already used up `limit` in its current window. Records nothing. */
+export function isRateLimited(key: string, limit: number): boolean {
+  const bucket = buckets.get(key);
+  return Boolean(bucket && bucket.resetAt > Date.now() && bucket.count >= limit);
+}
+
 /** Clears a bucket, so a successful unlock does not count against the user. */
 export function resetRateLimit(key: string): void {
   buckets.delete(key);

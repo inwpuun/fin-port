@@ -1,7 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { adminToken } from "@/lib/env";
-import { clientKey, rateLimit } from "@/lib/rate-limit";
+import { clientKey, isRateLimited, rateLimit } from "@/lib/rate-limit";
 import { SESSION_COOKIE, tokenMatches, verifySessionCookie } from "@/lib/session";
 
 /**
@@ -28,12 +28,16 @@ export async function isAuthorized(request: Request): Promise<boolean> {
 
   if (!bearer) return false;
 
-  // Only failed bearer attempts are metered, so ordinary browsing can never
-  // throttle itself. See rate-limit.ts for what this does and does not do.
+  // Only failed bearer attempts are metered, so a client using the right
+  // token (the CLI, the ZeroClaw agent) can never throttle itself. Once a
+  // client has failed FAIL_LIMIT times it is refused outright, right token or
+  // not, until the window ends. See rate-limit.ts for what this does and does not do.
   const key = await clientKey("api");
-  if (!rateLimit(key, FAIL_LIMIT, FAIL_WINDOW_MS).ok) return false;
+  if (isRateLimited(key, FAIL_LIMIT)) return false;
 
-  return tokenMatches(bearer, secret);
+  if (await tokenMatches(bearer, secret)) return true;
+  rateLimit(key, FAIL_LIMIT, FAIL_WINDOW_MS);
+  return false;
 }
 
 export function unauthorized(): Response {

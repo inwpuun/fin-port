@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthorized, unauthorized } from "@/lib/auth";
-import { withTransaction } from "@/lib/db/client";
+import { db, withTransaction } from "@/lib/db/client";
 import {
   deleteMyAllocationRule,
   getMyAllocationRules,
@@ -9,16 +9,72 @@ import {
   getMyTransactions,
   upsertMyAllocationRule
 } from "@/lib/my-port";
-import { addTransaction, deleteTransaction, isPositionTrade, type TransactionWriteResult } from "@/lib/trades";
+import {
+  addTransaction,
+  deleteTransaction,
+  getTransaction,
+  isPositionTrade,
+  listTransactions,
+  normalizeDate,
+  symbolKey,
+  updateTransaction,
+  type TransactionPatch,
+  type TransactionUpdateResult,
+  type TransactionWriteResult
+} from "@/lib/trades";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * The trade log, newest first, and the cash balances.
+ *
+ *   ?id=<id>                one row ({ transaction }), 404 if it does not exist
+ *   ?symbol=NVDA            one position, whatever spelling it was entered under (BRK.B = BRK-B)
+ *   ?side=buy,sell          one or more of buy, sell, dividend, fee, deposit, withdraw
+ *   ?from=2026-01-01&to=    occurred_on range, inclusive (YYYY-MM-DD or d/m/yy)
+ *   ?limit=50               newest N after filtering
+ *
+ * Unlike the page loaders this reports a database error as a 500 instead of
+ * an empty list, so an agent cannot mistake an outage for "no trades".
+ */
 export async function GET(request: NextRequest) {
   if (!(await isAuthorized(request))) return unauthorized();
 
-  const [transactions, cash] = await Promise.all([getMyTransactions(), getMyCashBalances()]);
-  return NextResponse.json({ transactions, cash }, { headers: { "cache-control": "no-store" } });
+  const params = request.nextUrl.searchParams;
+
+  try {
+    const id = params.get("id")?.trim();
+    if (id) {
+      const transaction = await getTransaction(db(), id);
+      return transaction ? json({ transaction }) : errorResponse("Transaction not found", 404);
+    }
+
+    const symbol = params.get("symbol")?.trim();
+    const sides = (params.get("side") || "")
+      .split(",")
+      .map((side) => side.trim().toLowerCase())
+      .filter(Boolean);
+    const from = params.get("from")?.trim() ? normalizeDate(params.get("from")!) : null;
+    const to = params.get("to")?.trim() ? normalizeDate(params.get("to")!) : null;
+    const limit = params.get("limit") ? Number(params.get("limit")) : null;
+    if (limit !== null && (!Number.isInteger(limit) || limit <= 0)) return errorResponse("limit must be a positive integer");
+
+    const key = symbol ? symbolKey(symbol) : null;
+    let transactions = (await listTransactions(db()))
+      .reverse()
+      .filter((row) => !key || symbolKey(row.symbol) === key)
+      .filter((row) => !sides.length || sides.includes(row.side))
+      .filter((row) => (!from || row.occurredOn >= from) && (!to || row.occurredOn <= to));
+    const total = transactions.length;
+    if (limit) transactions = transactions.slice(0, limit);
+
+    return json({ transactions, total, cash: await getMyCashBalances() });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to read transactions";
+    // normalizeDate's messages are input errors; anything else is the database.
+    return errorResponse(message, /date|future/i.test(message) ? 400 : 500);
+  }
 }
 
 /**
@@ -67,6 +123,54 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/**
+ * Edits one transaction: `?id=` (or `id` in the body) plus any of symbol,
+ * side, quantity, price, fee, currency, occurredOn, note. Fields left out keep
+ * their value. The row gets a new id, returned as `transaction.id`.
+ */
+export async function PATCH(request: NextRequest) {
+  if (!(await isAuthorized(request))) return unauthorized();
+
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("Request body must be valid JSON");
+  }
+  if (!body || typeof body !== "object") return errorResponse("Request body must be a JSON object");
+
+  const id = request.nextUrl.searchParams.get("id")?.trim() || readString(body.id);
+  if (!id) return errorResponse("Transaction id is required");
+
+  const patch: TransactionPatch = {};
+  for (const field of ["symbol", "side", "currency", "occurredOn"] as const) {
+    if (body[field] !== undefined) patch[field] = readString(body[field]);
+  }
+  for (const field of ["quantity", "price", "fee"] as const) {
+    if (body[field] !== undefined && body[field] !== "") patch[field] = Number(body[field]);
+  }
+  if (body.note !== undefined) patch.note = body.note === null ? null : readString(body.note) || null;
+  if (!Object.keys(patch).length) return errorResponse("Nothing to change");
+
+  let result: TransactionUpdateResult | null;
+  try {
+    result = await withTransaction((client) => updateTransaction(client, id, patch));
+  } catch (error) {
+    return errorResponse(error instanceof Error ? error.message : "Unable to update the transaction");
+  }
+
+  if (!result) return errorResponse("Transaction not found", 404);
+
+  try {
+    const category = typeof body.category === "string" ? body.category.trim() : "";
+    await syncAllocation(result, category);
+    if (isPositionTrade(result.previous) && !result.previousOpen) await deleteMyAllocationRule(result.previous.symbol);
+    return json({ ...(await snapshot(result)), previous: result.previous });
+  } catch (error) {
+    return errorResponse(error instanceof Error ? error.message : "Updated, but the page could not be refreshed", 500);
+  }
+}
+
 export async function DELETE(request: NextRequest) {
   if (!(await isAuthorized(request))) return unauthorized();
 
@@ -109,6 +213,10 @@ async function snapshot({ transaction }: TransactionWriteResult) {
     getMyCashBalances()
   ]);
   return { transaction, transactions, portfolio, allocationRules, cash };
+}
+
+function json(payload: unknown) {
+  return NextResponse.json(payload, { headers: { "cache-control": "no-store" } });
 }
 
 function readString(value: unknown) {
