@@ -455,7 +455,12 @@ servers = ["finport"]
 
 then add `"portfolio"` to `agents.luna.mcp_bundles`, add
 `finport__delete_transaction` and `finport__remove_from_watchlist` to the risk
-profile's `always_ask`, copy the skill into
+profile's `always_ask`, and the read-only tools (`finport__get_portfolio_summary`,
+`list_holdings`, `get_net_worth_history`, `list_transactions`, `get_prices`,
+`get_market_analysis`, `get_usd_thb_rate`, `list_watchlist`, `list_allocation`,
+each with the `finport__` prefix) to its `auto_approve` -- under
+`level = "supervised"` every MCP call not listed there waits for a click on
+Discord, copy the skill into
 `~/.zeroclaw/agents/luna/workspace/skills/fin-port/`, and
 `systemctl --user restart zeroclaw`.
 
