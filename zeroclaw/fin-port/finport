@@ -18,11 +18,14 @@
 
 set -eu
 
-CONFIG="${FIN_PORT_CONFIG:-${HOME:-/root}/.config/fin-port/env}"
-[ -r "$CONFIG" ] || { echo "{\"error\":\"missing config $CONFIG (FIN_PORT_URL, FIN_PORT_TOKEN)\"}"; exit 2; }
-
-FIN_PORT_URL=$(sed -n 's/^FIN_PORT_URL=//p' "$CONFIG" | tail -1)
-FIN_PORT_TOKEN=$(sed -n 's/^FIN_PORT_TOKEN=//p' "$CONFIG" | tail -1)
+# The environment wins (the ZeroClaw daemon hands FIN_PORT_* to the shell
+# through shell_env_passthrough); the file is the fallback for a terminal.
+if [ -z "${FIN_PORT_TOKEN:-}" ]; then
+  CONFIG="${FIN_PORT_CONFIG:-${HOME:-/root}/.config/fin-port/env}"
+  [ -r "$CONFIG" ] || { echo "{\"error\":\"FIN_PORT_TOKEN is not set and $CONFIG is not readable\"}"; exit 2; }
+  FIN_PORT_URL=${FIN_PORT_URL:-$(sed -n 's/^FIN_PORT_URL=//p' "$CONFIG" | tail -1)}
+  FIN_PORT_TOKEN=$(sed -n 's/^FIN_PORT_TOKEN=//p' "$CONFIG" | tail -1)
+fi
 [ -n "$FIN_PORT_TOKEN" ] || { echo '{"error":"FIN_PORT_TOKEN is empty"}'; exit 2; }
 FIN_PORT_URL="${FIN_PORT_URL:-http://localhost:3000}"
 
