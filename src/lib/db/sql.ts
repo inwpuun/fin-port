@@ -35,7 +35,7 @@ export type UpsertOptions = {
  * Builds one multi-row `insert ... on conflict do update`.
  *
  * Postgres caps a statement at 65535 parameters, so callers batch: the widest
- * table here is cash_transactions at 19 columns, which allows ~3400 rows per
+ * table here is about 20 columns, which allows ~3200 rows per
  * statement. The importers stay well under that.
  *
  * `updated_at` is left alone on purpose -- the touch_updated_at trigger sets

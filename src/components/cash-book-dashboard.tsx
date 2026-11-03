@@ -211,11 +211,11 @@ export function CashBookDashboard({ transactions }: { transactions: CashBookTran
 
         <section className="glass-panel rounded-3xl p-4 sm:p-6">
           <p className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Source</p>
-          <h2 className="mb-4 text-2xl font-black">public/cash-book</h2>
+          <h2 className="mb-4 text-2xl font-black">Firefly III</h2>
           <div className="grid gap-3 text-sm text-slate-300">
             <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-              <span>Files</span>
-              <strong className="text-white">{new Set(transactions.map((transaction) => transaction.file)).size}</strong>
+              <span>Accounts</span>
+              <strong className="text-white">{new Set(transactions.map((transaction) => transaction.account)).size}</strong>
             </div>
             <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
               <span>Transactions</span>
@@ -1059,7 +1059,6 @@ function TransactionModal({ modal, onClose }: { modal: NonNullable<TransactionMo
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
                   <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{transaction.account || "Account"}</span>
-                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{transaction.file}</span>
                   {transaction.tags && <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{transaction.tags}</span>}
                   <MemoTooltip memo={transaction.memo} />
                 </div>

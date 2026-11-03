@@ -33,8 +33,6 @@ const TABLES: Array<{ name: string; conflict: string[] }> = [
   { name: "holdings", conflict: ["symbol"] },
   { name: "allocations", conflict: ["category", "symbol"] },
   { name: "watchlist", conflict: ["symbol"] },
-  { name: "cash_accounts", conflict: ["name"] },
-  { name: "cash_transactions", conflict: ["id"] },
   { name: "fx_rates", conflict: ["base", "quote", "as_of"] },
   { name: "portfolio_snapshots", conflict: ["as_of"] },
   { name: "holding_transactions", conflict: ["id"] },

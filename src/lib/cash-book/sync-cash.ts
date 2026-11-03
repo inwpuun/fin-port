@@ -1,5 +1,6 @@
-import { num, type Db } from "@/lib/db/sql";
+import type { Db } from "@/lib/db/sql";
 import { fetchDailyCloses } from "@/lib/market";
+import type { CashBook } from "./firefly-map";
 import { CASH_SYMBOL, addTransaction, getCashBalances, isPositionTrade, listTransactions, symbolKey } from "@/lib/trades";
 
 /**
@@ -10,7 +11,7 @@ import { CASH_SYMBOL, addTransaction, getCashBalances, isPositionTrade, listTran
  * stocks, gold and the USD cash there) and BTC (the BTC holding). USD cash is
  * not in the cash book, so its rows are left alone and stay hand-entered.
  *
- * Every THB row on CASH is rebuilt from the book on each import, as weekly
+ * Every THB row on CASH is rebuilt from the book (read from Firefly III), as weekly
  * balance steps, so the net-worth chart follows the book without one row per
  * coffee.
  *
@@ -26,6 +27,11 @@ export const EXCLUDED_ACCOUNTS = [INVEST_ACCOUNT, "BTC"];
 export const CASH_BOOK_NOTE = "cash book";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+export function todayInBangkok() {
+  return new Date(Date.now() + BANGKOK_OFFSET_MS).toISOString().slice(0, 10);
+}
 
 export type CashSyncResult = { rows: number; thb: number; through: string | null };
 
@@ -38,14 +44,9 @@ function balanceOn(current: number, moves: Array<{ d: string; amount: number }>,
   return moves.reduce((balance, move) => (move.d > day ? balance - move.amount : balance), current);
 }
 
-export async function syncCashFromBook(db: Db): Promise<CashSyncResult> {
-  // One client inside a transaction: queries go one at a time.
-  const { rows: accounts } = await db.query<{ name: string; current_balance: string | null }>(
-    `select name, current_balance from cash_accounts`
-  );
-  const { rows: moves } = await db.query<{ account: string; d: string; amount: string }>(
-    `select account, occurred_on::text as d, amount from cash_transactions`
-  );
+export async function syncCashFromBook(db: Db, book: CashBook): Promise<CashSyncResult> {
+  const accounts = book.accounts;
+  const moves = book.rows.map((row) => ({ account: row.account, d: row.date, amount: row.amount }));
   const trades = await listTransactions(db);
 
   // THB rows are owned by the book from here on; USD rows are not touched.
@@ -55,7 +56,7 @@ export async function syncCashFromBook(db: Db): Promise<CashSyncResult> {
   const invest = accounts.find((account) => account.name === INVEST_ACCOUNT);
   if (!cashAccounts.length) return { rows: 0, thb: 0, through: null };
 
-  const cashNow = cashAccounts.reduce((sum, account) => sum + (num(account.current_balance) ?? 0), 0);
+  const cashNow = cashAccounts.reduce((sum, account) => sum + account.balance, 0);
   const cashMoves = moves
     .filter((move) => !EXCLUDED_ACCOUNTS.includes(move.account))
     .map((move) => ({ d: move.d, amount: Number(move.amount) }));
@@ -70,7 +71,10 @@ export async function syncCashFromBook(db: Db): Promise<CashSyncResult> {
   const days = [...cashMoves, ...investMoves].map((move) => move.d).sort();
   // Start at the first trade or the first book entry, whichever is earlier.
   const first = [buys[0]?.occurredOn, days[0]].filter(Boolean).sort()[0]!;
-  const through = days.at(-1)!;
+  // Never past today: Firefly can hold future-dated rows (a card bill booked
+  // ahead), and the trade log refuses future dates. Their money is left out of
+  // today's balance by balanceOn and arrives with the first sync on that day.
+  const through = [days.at(-1)!, todayInBangkok()].sort()[0]!;
 
   const fx = buys.some((trade) => trade.currency !== "THB")
     ? (await fetchDailyCloses("THB=X", addDays(first, -10))).closes
@@ -90,7 +94,7 @@ export async function syncCashFromBook(db: Db): Promise<CashSyncResult> {
   });
   const spentBy = (day: string) => spent.reduce((sum, item) => (item.d <= day ? sum + item.thb : sum), 0);
   const unrecordedBy = (day: string) =>
-    Math.max(0, spentBy(day) - (invest ? balanceOn(num(invest.current_balance) ?? 0, investMoves, day) : 0));
+    Math.max(0, spentBy(day) - (invest ? balanceOn(invest.balance, investMoves, day) : 0));
 
   // Weekly steps, plus the days the uncounted spending moves, so a buy and the
   // cash that paid for it leave on the same day.

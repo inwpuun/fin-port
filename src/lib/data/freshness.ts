@@ -1,8 +1,11 @@
 import "server-only";
+import { peekCashBook } from "@/lib/cash-book/firefly-book";
 import { queryOne } from "@/lib/db/client";
 
 /**
  * When each table's rows last changed, for the "updated" label beside the logo.
+ * The cash book lives in Firefly III: its time is the latest transaction edit
+ * there, taken from memory so the label never waits on Firefly.
  *
  * Reads `updated_at`, which every table maintains: it defaults to now() on
  * insert and the touch_updated_at trigger bumps it on update. Because the
@@ -46,11 +49,11 @@ async function latest(table: string): Promise<string | null> {
 }
 
 export async function getDataFreshness(): Promise<Freshness> {
-  const [holdings, allocations, watchlist, cashBook, trades] = await Promise.all([
+  const cashBook = peekCashBook()?.updatedAt ?? null;
+  const [holdings, allocations, watchlist, trades] = await Promise.all([
     latest("holdings"),
     latest("allocations"),
     latest("watchlist"),
-    latest("cash_transactions"),
     // A deposit changes cash without touching holdings or allocations.
     latest("holding_transactions")
   ]);

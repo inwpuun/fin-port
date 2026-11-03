@@ -14,10 +14,9 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:from-supabase": "tsx scripts/migrate-from-supabase.ts",
     "db:seed": "tsx scripts/import.ts seed",
-    "db:cash-book": "tsx scripts/import.ts cash-book",
+    "cash:rebuild": "tsx scripts/rebuild-cash.ts",
     "db:import": "tsx scripts/import.ts all",
     "db:trades": "tsx scripts/import-trades.ts",
-    "db:verify": "tsx scripts/verify-parse.ts",
     "check:analytics": "tsx scripts/check-analytics.ts"
   },
   "engines": {

@@ -13,6 +13,7 @@ setDefaultAutoSelectFamilyAttemptTimeout(2500);
 declare global {
   var __finPortSignalTimer: NodeJS.Timeout | undefined;
   var __finPortReportTimer: NodeJS.Timeout | undefined;
+  var __finPortFireflyTimer: NodeJS.Timeout | undefined;
 }
 
 const minutes = Number(process.env.SIGNAL_ALERT_INTERVAL_MINUTES ?? 30);
@@ -70,4 +71,32 @@ if (configured && process.env.PORTFOLIO_REPORT !== "0" && !globalThis.__finPortR
   }, 60_000);
   globalThis.__finPortReportTimer.unref();
   console.log("portfolio report: US close 16:05 ET, weekdays");
+}
+
+// --- Cash book from Firefly III ----------------------------------------------
+//
+// The cash book is read from Firefly and kept in memory. Every
+// FIREFLY_REFRESH_MINUTES (default 2) this re-reads it, so pages never wait on
+// Firefly, and rebuilds THB cash when the book changed. Off without
+// FIREFLY_URL / FIREFLY_TOKEN, or with the interval set to 0.
+
+const fireflyMinutes = Number(process.env.FIREFLY_REFRESH_MINUTES ?? 2);
+const fireflyConfigured = Boolean(process.env.FIREFLY_URL && process.env.FIREFLY_TOKEN);
+
+if (fireflyConfigured && fireflyMinutes > 0 && !globalThis.__finPortFireflyTimer) {
+  const tick = async () => {
+    try {
+      const { describeCashBookRefresh, refreshCashBook } = await import("@/lib/cash-book/run-sync");
+      const result = await refreshCashBook();
+      if (result.cash) console.log(`cash book: ${describeCashBookRefresh(result)}`);
+    } catch (error) {
+      console.error("cash book refresh failed:", error instanceof Error ? error.message : error);
+    }
+  };
+
+  // Load at start, so the first page view does not wait the ~3 s a full read takes.
+  setTimeout(tick, 5_000).unref();
+  globalThis.__finPortFireflyTimer = setInterval(tick, fireflyMinutes * 60_000);
+  globalThis.__finPortFireflyTimer.unref();
+  console.log(`cash book: reading Firefly every ${fireflyMinutes} min`);
 }

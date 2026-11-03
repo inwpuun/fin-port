@@ -2,19 +2,17 @@
  * CSV -> Postgres importer.
  *
  *   npm run db:seed          # holdings, allocations, watchlist from data/*.csv
- *   npm run db:cash-book     # every data/cash-book/report-*.csv
- *   npm run db:import        # both
- *   npx tsx scripts/import.ts cash-book path/to/other-export.csv
+ *   npm run db:import        # the same
+ *
+ * The cash book is no longer a CSV import: the app reads it from Firefly III.
  *
  * Everything runs in upsert mode, so re-running is safe and never duplicates.
  * This connects with DATABASE_URL and is meant to be run from a trusted
  * machine or CI -- never from a browser.
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Client } from "pg";
-import { importCashBook } from "../src/lib/cash-book/import";
-import { describeCashSync, syncCashFromBook } from "../src/lib/cash-book/sync-cash";
 import { importAllocations, importHoldings, importWatchlist } from "../src/lib/seed";
 import { connect, loadEnv, projectRoot } from "./db";
 
@@ -46,65 +44,16 @@ async function seed(client: Client) {
   }
 }
 
-async function cashBook(client: Client, explicit: string[]) {
-  let files = explicit;
-
-  if (!files.length) {
-    const dir = path.join(dataDir, "cash-book");
-    const entries = await readdir(dir).catch(() => [] as string[]);
-    files = entries
-      .filter((entry) => entry.toLowerCase().endsWith(".csv"))
-      .sort()
-      .map((entry) => path.join(dir, entry));
-  }
-
-  if (!files.length) {
-    console.warn("  skip  no cash-book CSVs found in data/cash-book");
-    return;
-  }
-
-  const sources = await Promise.all(
-    files.map(async (file) => ({
-      name: path.basename(file),
-      content: await readFile(file, "utf8")
-    }))
-  );
-
-  const report = await importCashBook(client, sources);
-
-  for (const file of report.files) {
-    console.log(
-      `  read  ${file.name.padEnd(20)} ${String(file.transactions).padStart(5)} tx  ` +
-        `${file.accounts} accounts  ${file.skipped} skipped  ${file.collisions} key collisions`
-    );
-  }
-  console.log(
-    `  ok    cash_transactions ${report.transactionsUpserted} rows upserted, ` +
-      `cash_accounts ${report.accountsUpserted} rows, in ${report.durationMs} ms`
-  );
-  if (report.keyCollisionsResolved) {
-    console.log(
-      `  note  ${report.keyCollisionsResolved} rows shared a natural key and were kept apart by occurrence index.`
-    );
-  }
-
-  // A savepoint keeps the ledger import even when the cash rebuild fails.
-  await client.query("savepoint cash_sync");
-  try {
-    console.log(`  ${describeCashSync(await syncCashFromBook(client))}`);
-  } catch (error) {
-    await client.query("rollback to savepoint cash_sync");
-    console.warn(`  warn  cash not updated: ${error instanceof Error ? error.message : error}`);
-  }
-}
-
 async function main() {
   loadEnv();
 
-  const [command = "all", ...rest] = process.argv.slice(2);
+  const [command = "all"] = process.argv.slice(2);
 
-  if (!["seed", "cash-book", "all"].includes(command)) {
-    throw new Error(`Unknown command "${command}". Use: seed | cash-book | all`);
+  if (command === "cash-book") {
+    throw new Error("The cash book is read from Firefly III now; there is nothing to import.");
+  }
+  if (!["seed", "all"].includes(command)) {
+    throw new Error(`Unknown command "${command}". Use: seed | all`);
   }
 
   console.log(`fin-port import: ${command}`);
@@ -116,8 +65,7 @@ async function main() {
     // should leave the tables as they were, not partly rewritten.
     await client.query("begin");
 
-    if (command === "seed" || command === "all") await seed(client);
-    if (command === "cash-book" || command === "all") await cashBook(client, rest);
+    await seed(client);
 
     await client.query("commit");
   } catch (error) {

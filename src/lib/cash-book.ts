@@ -1,61 +1,27 @@
 import "server-only";
-import { query } from "@/lib/db/client";
-import { num } from "@/lib/db/sql";
+import { getCashBook } from "@/lib/cash-book/firefly-book";
+import type { CashBookRow } from "@/lib/cash-book/firefly-map";
 import type { CashBookTransaction } from "@/types/cash-book";
 
 /**
- * Cash-book reads. The exported surface is unchanged from the CSV version, so
- * cash-book-dashboard.tsx keeps working; only the source moved to Postgres.
- *
- * Rows get there through the importer (npm run db:cash-book, the /cash-book
- * upload form, or POST /api/cash-book/import), which upserts on a content
- * hash. That also means `id` is now stable across imports -- the CSV version
- * used `file:rowIndex`, which shifted whenever a row was inserted upstream.
+ * Cash-book reads, straight from Firefly III (held in memory and refreshed in
+ * the background, see cash-book/firefly-book.ts). Nothing is stored in
+ * Postgres. The exported surface is the one the CSV and Postgres versions
+ * had, so cash-book-dashboard.tsx keeps working. Ids are
+ * `ff:<journal id>:<src|dst>`, stable for as long as the Firefly row exists.
  */
 
 const CATEGORY_SEPARATOR = "►";
 
-type TransactionRow = {
-  id: string;
-  account: string;
-  transfer_account: string | null;
-  description: string | null;
-  category: string | null;
-  subcategory: string | null;
-  occurred_on: string;
-  occurred_at: string | null;
-  memo: string | null;
-  amount: string;
-  currency: string | null;
-  tags: string | null;
-  running_balance: string | null;
-  source_file: string | null;
-  source_year: number | null;
-};
-
 export async function getCashBookTransactions(): Promise<CashBookTransaction[]> {
-  let rows: TransactionRow[];
+  let rows: CashBookRow[];
 
   try {
-    // One statement for the whole ledger. The PostgREST version had to page
-    // through in blocks of 1000 because the API caps a response; a direct
-    // connection has no such cap, and a few thousand rows is a single cheap
-    // sequential scan.
-    //
-    // occurred_on is cast to text: node-postgres turns a `date` into a JS Date
-    // at the server's local midnight, and formatting that back can land on the
-    // previous day. The column is a calendar date, so it stays a string.
-    rows = await query<TransactionRow>(
-      `select id, account, transfer_account, description, category, subcategory,
-              occurred_on::text as occurred_on, occurred_at::text as occurred_at,
-              memo, amount, currency, tags, running_balance, source_file, source_year
-         from cash_transactions
-        order by occurred_on desc, occurred_at desc nulls last`
-    );
+    rows = (await getCashBook()).rows;
   } catch (error) {
-    // Same contract as the CSV version: an unreachable store reads as empty so
-    // the dashboard renders instead of throwing. Log it, though -- a silent
-    // empty ledger is otherwise indistinguishable from a real one.
+    // Same contract as before: an unreachable source reads as empty so the
+    // dashboard renders instead of throwing. Log it, though -- a silent empty
+    // ledger is otherwise indistinguishable from a real one.
     console.error("getCashBookTransactions failed:", error);
     return [];
   }
@@ -69,39 +35,38 @@ export async function getCashBookTransactions(): Promise<CashBookTransaction[]> 
     );
 }
 
-function toCashBookTransaction(row: TransactionRow): CashBookTransaction {
-  const amount = num(row.amount) ?? 0;
-  const [year, month, day] = row.occurred_on.split("-").map(Number);
+function toCashBookTransaction(row: CashBookRow): CashBookTransaction {
+  const amount = row.amount;
+  const [year, month, day] = row.date.split("-").map(Number);
 
-  const transferAccount = row.transfer_account ?? "";
+  const transferAccount = row.transferAccount ?? "";
   const rawCategory = joinCategory(row.category, row.subcategory);
-  const description =
-    (row.description ?? "").trim() || transferDescription(transferAccount, amount);
+  const description = row.description.trim() || transferDescription(transferAccount, amount);
   const category = normalizeCategory(rawCategory, transferAccount, description);
 
   return {
     id: row.id,
-    file: row.source_file ?? "",
-    sourceYear: row.source_year ?? year,
+    file: "Firefly",
+    sourceYear: year,
     account: row.account,
     transferAccount,
     description,
     rawCategory,
     category,
     categoryGroup: normalizeCategoryGroup(category),
-    date: row.occurred_on,
+    date: row.date,
     dateLabel: `${pad(day)}/${pad(month)}/${year}`,
     monthKey: `${year}-${pad(month)}`,
     year,
     month,
     day,
-    // The dashboard sorts and renders on HH:mm, so trim the stored seconds.
-    time: (row.occurred_at ?? "").slice(0, 5),
+    // The dashboard sorts and renders on HH:mm, so trim the seconds.
+    time: row.time.slice(0, 5),
     memo: row.memo ?? "",
     amount,
     currency: row.currency || "THB",
     tags: row.tags ?? "",
-    balance: num(row.running_balance),
+    balance: row.balance,
     type: amount >= 0 ? "income" : "expense"
   };
 }

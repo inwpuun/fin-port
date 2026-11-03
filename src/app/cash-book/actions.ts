@@ -4,9 +4,7 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { adminToken } from "@/lib/env";
 import { SESSION_COOKIE, verifySessionCookie } from "@/lib/session";
-import { withTransaction } from "@/lib/db/client";
-import { importCashBook, type SourceFile } from "@/lib/cash-book/import";
-import { describeCashSync, syncCashFromBook } from "@/lib/cash-book/sync-cash";
+import { describeCashBookRefresh, refreshCashBook } from "@/lib/cash-book/run-sync";
 
 async function assertUnlocked() {
   const store = await cookies();
@@ -14,67 +12,21 @@ async function assertUnlocked() {
   if (!ok) throw new Error("Session expired. Reload and unlock again.");
 }
 
-export type ImportState = {
-  error?: string;
-  summary?: string;
-  details?: string[];
-};
+export type RefreshState = { error?: string; summary?: string };
 
-const MAX_BYTES = 4 * 1024 * 1024;
-
-/**
- * Upload handler behind the cash-book page. Runs the same upsert path as the
- * CLI and the API route, so a file imported here and a file imported there
- * produce identical rows and identical ids.
- */
-export async function importCashBookAction(
-  _previous: ImportState,
-  formData: FormData
-): Promise<ImportState> {
+/** "Refresh" on the cash-book page: read Firefly now instead of waiting for the timer. */
+export async function refreshCashBookAction(): Promise<RefreshState> {
   await assertUnlocked();
 
-  const uploads = formData
-    .getAll("files")
-    .filter((entry): entry is File => entry instanceof File && entry.size > 0);
-
-  if (!uploads.length) return { error: "Choose at least one CSV export." };
-
-  const totalBytes = uploads.reduce((sum, file) => sum + file.size, 0);
-  if (totalBytes > MAX_BYTES) {
-    return {
-      error: `Upload is ${Math.round(totalBytes / 1024)} KB, over the ${MAX_BYTES / 1024} KB request limit. Import fewer files at once, or run npm run db:cash-book.`
-    };
-  }
-
   try {
-    const sources: SourceFile[] = await Promise.all(
-      uploads.map(async (file) => ({ name: file.name, content: await file.text() }))
-    );
-
-    const report = await withTransaction((client) => importCashBook(client, sources));
+    const result = await refreshCashBook();
     revalidatePath("/cash-book");
-
-    // Its own transaction: the ledger import stands even if the cash rebuild
-    // cannot reach Yahoo for the exchange rate.
-    let cashLine: string;
-    try {
-      cashLine = describeCashSync(await withTransaction((client) => syncCashFromBook(client)));
+    if (result.cash) {
       revalidatePath("/portfolio");
       revalidatePath("/allocation");
-    } catch (syncError) {
-      cashLine = `Cash not updated: ${syncError instanceof Error ? syncError.message : String(syncError)}`;
     }
-
-    return {
-      summary: `${report.transactionsUpserted} transactions and ${report.accountsUpserted} accounts upserted in ${report.durationMs} ms.`,
-      details: report.files.map(
-        (file) =>
-          `${file.name}: ${file.transactions} transactions, ${file.accounts} accounts` +
-          (file.skipped ? `, ${file.skipped} unparseable rows skipped` : "") +
-          (file.collisions ? `, ${file.collisions} natural-key collisions kept apart` : "")
-      ).concat(cashLine)
-    };
+    return { summary: describeCashBookRefresh(result) };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "Import failed." };
+    return { error: error instanceof Error ? error.message : "Refresh failed." };
   }
 }

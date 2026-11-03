@@ -2,8 +2,9 @@
 
 Next.js financial dashboard for US stocks, gold, bitcoin, indices, a personal
 portfolio, and a Thai-baht cash ledger. Data lives in a Postgres that runs
-beside the app in `docker-compose.yml`; the CSV exports are only an import
-format.
+beside the app in `docker-compose.yml`. The cash ledger is copied from
+[Firefly III](https://www.firefly-iii.org/), which is where transactions are
+entered; the other CSVs are only a seed format.
 
 ## Run
 
@@ -33,7 +34,7 @@ Open `http://localhost:3000` and unlock with your `ADMIN_TOKEN`.
 - `/portfolio` holdings tracker with calculated buy price, quantity, live market value, total net worth, P/L, drawdown flags, a net-worth-over-time chart, and the trade log
 - `/watchlist` watchlist tracker with live prices, one-year moves, drawdown flags, and a signal column
 - `/allocation` allocation chart and category table
-- `/cash-book` ledger with per-year overview, category and description breakdowns, graphs, transaction modals, and CSV import
+- `/cash-book` ledger with per-year overview, category and description breakdowns, graphs, transaction modals, and a Firefly III sync
 - `/unlock` passphrase gate
 
 ## Allocation follows the portfolio
@@ -61,11 +62,12 @@ through the `touch_updated_at` trigger on update:
 | --- | --- |
 | `/` and `/watchlist` | `watchlist` |
 | `/portfolio` and `/allocation` | the later of `holdings` and `allocations` |
-| `/cash-book` | `cash_transactions` |
+| `/cash-book` | the latest transaction edit in Firefly III |
 
-Because the importer upserts, re-importing an unchanged export still moves the
-timestamp — the label answers "when was this data last written", not "when did
-a value last differ". The absolute time renders first and is pinned to
+Because the seed importer upserts, re-importing an unchanged CSV still moves
+the timestamp — the label answers "when was this data last written", not "when
+did a value last differ". `/cash-book` has no table: its label is the latest
+`updated_at` among Firefly's transactions, read from memory. The absolute time renders first and is pinned to
 Asia/Bangkok so the server and client produce the same string; the relative
 form ("3 hrs ago") replaces it after mount and refreshes each minute. The
 lookup is skipped entirely without a valid session, so `/unlock` never queries
@@ -123,7 +125,9 @@ wherever both set a name, so keep personal overrides there.
 | `POSTGRES_PASSWORD` | `openssl rand -hex 24` | set before the first `up`; changing it later needs the volume recreated |
 | `POSTGRES_PORT` | `5432` | host port, if something else already holds 5432 |
 | `DATABASE_URL` | `postgres://finport:<password>@localhost:5432/finport` | how the **host** connects. Compose overrides it for the app container with `@db:5432` |
-| `ADMIN_TOKEN` | `openssl rand -hex 32` | unlock passphrase and the import bearer token |
+| `ADMIN_TOKEN` | `openssl rand -hex 32` | unlock passphrase and the API bearer token |
+| `FIREFLY_URL` / `FIREFLY_TOKEN` | Firefly base URL and a personal access token | source of the cash book (see Cash book from Firefly III) |
+| `FIREFLY_REFRESH_MINUTES` | default `2` | how old the in-memory cash book may get before it is re-read in the background |
 | `BOT_API_KEY` | Bank of Thailand developer portal | USD/THB reference rate for THB display |
 
 ### 2. Create the schema
@@ -154,14 +158,12 @@ in `public/` is served to the world at `https://<your-app>/my-port.csv`.
 data/my-port.csv
 data/my-allocation.csv
 data/my-watchlist.csv
-data/cash-book/report-*.csv
 ```
 
 ```sh
 npm run db:seed        # holdings, allocations, watchlist
-npm run db:cash-book   # every data/cash-book/report-*.csv
-npm run db:import      # both
-npm run db:verify      # parse only, no database: sanity-check a new export
+npm run db:import      # the same
+npm run cash:rebuild   # rebuild THB cash from the cash book in Firefly III
 ```
 
 Each run is one transaction: a file that fails validation halfway through
@@ -210,12 +212,11 @@ so rather than reporting `fetch failed`.
 | `holdings` | `data/my-port.csv` | `symbol` |
 | `allocations` | `data/my-allocation.csv` | `(category, symbol)` |
 | `watchlist` | `data/my-watchlist.csv` | `symbol` |
-| `cash_accounts` | account header rows | `name` |
-| `cash_transactions` | transaction rows | content-hash `id` |
 
 `src/lib/my-port.ts`, `src/lib/my-watchlist.ts` and `src/lib/cash-book.ts` keep
 the same exported functions they had when they read CSV files, so the pages and
-components above them are unchanged — only the backing store moved.
+components above them are unchanged — only the backing store moved. The cash
+book has no table at all: it is read from Firefly III.
 
 The full schema is `db/migrations/`. Beyond the five tables above it also
 defines `fx_rates`, `portfolio_snapshots`, `holding_transactions`,
@@ -265,24 +266,27 @@ they stand and records only the difference, dated, so the history knows when
 money arrived. The old single `cash value` on the `CASH` allocation row becomes
 the opening deposit the first time cash is changed.
 
-**THB cash follows the cash book.** Every cash-book import (page, API or
-`npm run db:cash-book`) rebuilds all THB rows on `CASH` from the book
+**THB cash follows the cash book.** Whenever the book in Firefly changes (seen
+by the background refresh, **Refresh**, the API or `npm run cash:rebuild`), all
+THB rows on `CASH` are rebuilt from it
 (`src/lib/cash-book/sync-cash.ts`):
 
 - THB cash is the sum of every account except `Dime Invest` and `BTC`, whose
   money already shows as positions. Card debt (Ktc) counts against it.
 - It is written as weekly balance steps (note `cash book`), through the last
-  day in the book.
+  day in the book or today, whichever is earlier: a future-dated row (a card
+  bill booked ahead) counts from its own day. The rebuild runs whenever the
+  book changes, and once a day regardless.
 - Until May 2025 buys were paid for without a recorded transfer into Dime
   Invest, so on each day whatever the trade log had spent beyond the Dime
   Invest balance (at that day's USD/THB) is taken off the cash. Without it
   that money counts twice, as cash and as the stocks it bought.
 - USD cash is not in the book. Its rows are never touched; keep it current
-  with **Update cash**. A THB change made there lasts until the next import.
+  with **Update cash**. A THB change made there lasts until the next sync that
+  changes the book.
 
-The rebuild runs in its own transaction after the import, so if it fails (it
-needs Yahoo's USD/THB history) the ledger import still stands and the import
-result says why cash was not updated.
+If the rebuild fails (it needs Yahoo's USD/THB history) the refresh result says
+why cash was not updated, and the next refresh tries again.
 
 Net Worth on `/portfolio` includes cash; Money In is cost basis plus cash.
 
@@ -342,53 +346,39 @@ clears its lane, so no symbol is left behind with no value against it.
 
 The `CASH` row opens the cash form instead (see Transactions and cash).
 
-## Cash-book import
+## Cash book from Firefly III
 
-The exports have no id column, so each row's primary key is a content hash:
+Transactions are entered in Firefly III (by hand, or through an agent using
+its API). fin-port reads them from Firefly's API; there is no copy in Postgres.
 
-```
-sha256(account | description | date | time | amount | category | memo | transfer) + ":" + occurrence
-```
-
-Account, description, date, time and amount are the natural key. Category, memo
-and transfer are folded in because the real exports contain same-minute,
-same-amount pairs on one account that differ only in those fields — hashing the
-five alone would collapse two real transactions into one and lose money from
-the ledger. `occurrence` is a final tie-break for byte-identical rows.
-
-Because ids are derived from content, **import is an upsert**: re-importing the
-same export is a no-op, a corrected export updates rows in place, and nothing
-is deleted. Importing all three years twice yields exactly 3,038 rows. Ids are
-also stable across imports, unlike the old `file:rowIndex` form which shifted
-whenever a row was inserted upstream.
-
-Other handling worth knowing:
-
-- Thai Buddhist Era dates (`31/12/2567`) convert to ISO Gregorian (`2024-12-31`). Years under 2400 are left alone, so a future locale change won't corrupt data.
-- The exporter's `Category ► Subcategory` splits into two columns and is rejoined for display.
-- Account header rows put the currency in the column labelled `Account`; the parser accounts for that.
-- Amounts (`-1,083.51`, `+4,586.04`) parse to numerics.
-- **Transfers are excluded from income and expense.** A move from K-bank to Dime Invest writes a debit and a credit; counting both reports the same baht twice. In this data 572 transfer rows sum to exactly 0.00, and including them inflates 2026 income from ฿341k to ฿812k. `getCashBookTransactions()` filters them out, and the SQL rollups take `p_include_transfers => true` if you ever want them.
-
-### Three ways to import
-
-Browser — `/cash-book` → **Import** → choose files. Uses your unlock session;
-no token is exposed to JavaScript.
-
-CLI — reads `data/` and connects with `DATABASE_URL`:
+- **Read, mapped, kept in memory** (`src/lib/cash-book/firefly-book.ts`). A full
+  read of ~3k transactions takes ~3 s on a Raspberry Pi, so the last read is
+  held in memory (~2 MB) and served at once. When it is older than
+  `FIREFLY_REFRESH_MINUTES` (default 2) the next request still gets it and a
+  re-read starts in the background; a timer re-reads on the same interval, so
+  pages only wait on the first read after a restart. **Refresh** on
+  `/cash-book` re-reads immediately.
+- **If Firefly is down**, the last read keeps being served; after a restart with
+  Firefly down the cash book is empty until it is back.
+- **Same shape as the MoneyWiz export it replaced** (`firefly-map.ts`). An
+  expense or income is one row on its asset account; a transfer is two, out of
+  the source and into the destination. The destination row reads
+  `Transfer from <source>` when the source reads `Transfer to …`, and takes its
+  date from Firefly's `process_date` when set (MoneyWiz let the two sides carry
+  different times). `Parent ► Child` categories split into category and
+  subcategory; tags are written `A; B; `. Opening balances are not rows; each
+  account's balance is its opening balance plus every row, future-dated ones
+  included.
+- Ids are `ff:<journal id>:src|dst`.
+- **Transfers are excluded from income and expense.** A move from K-bank to Dime Invest writes a debit and a credit; counting both reports the same baht twice. `getCashBookTransactions()` filters them out.
 
 ```sh
-npm run db:cash-book
-npx tsx scripts/import.ts cash-book path/to/another-export.csv
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" https://<your-app>/api/cash-book/refresh
 ```
 
-HTTP — for automation:
-
-```sh
-curl -X POST https://<your-app>/api/cash-book/import \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -F "files=@data/cash-book/report-2026.csv"
-```
+When Firefly runs in another Compose project on the same host, point the app
+at it through the host: `FIREFLY_URL=http://host.docker.internal:<port>`
+(`docker-compose.yml` maps that name to the host gateway).
 
 ## API
 
@@ -407,7 +397,7 @@ Nothing but `/unlock` and static assets answers without one.
 | `POST` | `/api/portfolio/cash` | required | set the USD and THB cash balances |
 | `GET` | `/api/portfolio/history` | required | daily net worth and money in since the first trade |
 | `GET` `POST` `DELETE` | `/api/allocation` | required | move a symbol between lanes, edit the cash balance |
-| `POST` | `/api/cash-book/import` | required | CSV upsert |
+| `POST` | `/api/cash-book/refresh` | required | re-read the cash book from Firefly III now |
 
 ## Diagnosing a deployment
 
@@ -468,8 +458,8 @@ Two things the app no longer does for you, now that the database is yours:
 - **Put TLS in front of it** if the host is reachable from anywhere but
   localhost. The passphrase gate protects the pages, not the wire.
 
-Import into a deployment either by pointing `DATABASE_URL` at it and running
-`npm run db:import`, or by uploading through `/cash-book`.
+Seed a deployment by pointing `DATABASE_URL` at it and running
+`npm run db:import`; the cash book arrives on its own from Firefly.
 
 ### Passphrase hardening
 

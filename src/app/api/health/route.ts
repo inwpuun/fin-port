@@ -21,9 +21,7 @@ export const dynamic = "force-dynamic";
 const tables = [
   "holdings",
   "allocations",
-  "watchlist",
-  "cash_accounts",
-  "cash_transactions"
+  "watchlist"
 ] as const;
 
 function describeError(error: unknown) {
@@ -46,7 +44,9 @@ export async function GET(request: NextRequest) {
   const env = {
     DATABASE_URL: Boolean(process.env.DATABASE_URL),
     ADMIN_TOKEN: Boolean(process.env.ADMIN_TOKEN),
-    BOT_API_KEY: Boolean(process.env.BOT_API_KEY)
+    BOT_API_KEY: Boolean(process.env.BOT_API_KEY),
+    FIREFLY_URL: Boolean(process.env.FIREFLY_URL),
+    FIREFLY_TOKEN: Boolean(process.env.FIREFLY_TOKEN)
   };
 
   // A value pasted with a trailing newline or space is a common and otherwise

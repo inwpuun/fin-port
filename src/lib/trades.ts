@@ -254,7 +254,7 @@ async function findCashRule(db: Db) {
 
 /**
  * Ids are content hashes plus an occurrence index, the same scheme as
- * cash_transactions: two identical buys on one day stay two rows, and an
+ * the old CSV cash book: two identical buys on one day stay two rows, and an
  * import that is re-run computes the same ids instead of duplicating.
  */
 async function insertTransactions(db: Db, trades: Array<Omit<HoldingTransaction, "id">>) {

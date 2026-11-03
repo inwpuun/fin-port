@@ -53,6 +53,10 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-finport}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-finport}
     ports:
       - "3000:3000"
+    # Lets FIREFLY_URL=http://host.docker.internal:<port> reach a Firefly III
+    # published on the same host by another Compose project.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # No bind mount for ./public. Portfolio and watchlist edits go to Postgres,
     # so they no longer have to be written back to CSV files -- which is also
     # why this image can run with a read-only filesystem.
